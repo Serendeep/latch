@@ -59,7 +59,7 @@ mise exec -- pnpm build
 mise exec -- cargo build -p latch-desktop --features custom-protocol --locked
 ```
 
-The Linux native smoke test requires `tauri-driver` 2.0.6, `WebKitWebDriver`, and `xvfb-run` on PATH. With those installed, run `xvfb-run -a python3 tests/native_smoke.py`. It checks real status IPC and rejection of an ungranted command. Browser tests do not cover that boundary.
+The Linux native smoke test requires `tauri-driver` 2.0.6, `WebKitWebDriver`, and `xvfb-run` on PATH. With those installed, run `dbus-run-session -- xvfb-run -a python3 tests/native_smoke.py`. The fresh D-Bus session avoids interference from the runner's desktop services. The test checks real status IPC and rejection of an ungranted command. Browser tests do not cover that boundary.
 
 CI also runs `pnpm audit`, cargo-audit 0.22.2, and Gitleaks 8.30.1. Dependency warnings must be reviewed; a zero exit code alone does not establish safety.
 

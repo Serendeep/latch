@@ -54,4 +54,5 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           cargo install tauri-driver --version 2.0.6 --locked
+          # Isolate desktop services as well as the virtual display.
           dbus-run-session -- xvfb-run -a python3 tests/native_smoke.py
