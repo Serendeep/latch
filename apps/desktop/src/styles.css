@@ -1,0 +1,215 @@
+:root {
+  font-family:
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+}
+button,
+select {
+  font: inherit;
+}
+.app {
+  --background: #f3f6f9;
+  --surface: #ffffff;
+  --text: #22313f;
+  --muted: #526373;
+  --border: #c6d0da;
+  --accent: #245b84;
+  color-scheme: light;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--background);
+  color: var(--text);
+}
+.app[data-theme="dark"] {
+  --background: #171e26;
+  --surface: #202a35;
+  --text: #edf3f8;
+  --muted: #b0bfcd;
+  --border: #526373;
+  --accent: #96c9ef;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: dark) {
+  .app[data-theme="system"] {
+    --background: #171e26;
+    --surface: #202a35;
+    --text: #edf3f8;
+    --muted: #b0bfcd;
+    --border: #526373;
+    --accent: #96c9ef;
+    color-scheme: dark;
+  }
+}
+.app-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1.5rem;
+  padding: 1.25rem 2rem;
+  border-bottom: 1px solid var(--border);
+}
+.wordmark {
+  font:
+    600 1.1rem ui-monospace,
+    "Cascadia Code",
+    "SFMono-Regular",
+    monospace;
+  letter-spacing: -0.06em;
+}
+.wordmark span {
+  color: var(--accent);
+}
+.theme-control {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+select {
+  padding: 0.45rem 0.65rem;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 0.35rem;
+}
+main {
+  width: min(100%, 44rem);
+  margin: auto;
+  padding: 3.25rem 2rem;
+}
+.section-label {
+  font:
+    500 0.75rem ui-monospace,
+    "Cascadia Code",
+    monospace;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+h1 {
+  margin: 0.75rem 0 0;
+  font-size: clamp(1.65rem, 4vw, 2.35rem);
+  font-weight: 580;
+  letter-spacing: -0.045em;
+  line-height: 1.15;
+}
+.intro {
+  margin: 0.9rem 0 2.25rem;
+  color: var(--muted);
+  line-height: 1.65;
+}
+.vault-panel {
+  border: 1px solid var(--border);
+  border-radius: 0.65rem;
+  background: var(--surface);
+  overflow: hidden;
+}
+.panel-header {
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+h2 {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin: 0;
+}
+.build-label {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+.panel-body {
+  padding: 1.25rem;
+}
+.status {
+  display: block;
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 550;
+  line-height: 1.6;
+}
+.supporting-text {
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin: 0.5rem 0 0;
+  line-height: 1.7;
+}
+.scope-note {
+  font-size: 0.8rem;
+  color: var(--muted);
+  line-height: 1.75;
+  margin: 1.25rem 0 0;
+  max-width: 37rem;
+}
+button {
+  margin-top: 1rem;
+  padding: 0.65rem 1rem;
+  border: 1px solid var(--accent);
+  border-radius: 0.35rem;
+  background: var(--surface);
+  color: var(--accent);
+  cursor: pointer;
+}
+button:hover {
+  background: var(--background);
+}
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 4px;
+}
+footer {
+  padding: 1rem 2rem;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  font:
+    0.7rem ui-monospace,
+    "Cascadia Code",
+    monospace;
+  color: var(--muted);
+}
+.skip-link {
+  position: absolute;
+  top: 0.5rem;
+  left: 0.5rem;
+  padding: 0.75rem;
+  transform: translateY(-160%);
+  background: var(--surface);
+  color: var(--accent);
+  z-index: 1;
+}
+.skip-link:focus {
+  transform: translateY(0);
+}
+@media (max-width: 480px) {
+  .app-header {
+    padding: 1rem;
+  }
+  main {
+    padding: 2rem 1rem;
+  }
+  footer {
+    padding: 1rem;
+    flex-wrap: wrap;
+  }
+  .theme-control {
+    gap: 0.4rem;
+  }
+}

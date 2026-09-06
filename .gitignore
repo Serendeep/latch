@@ -1,0 +1,26 @@
+node_modules/
+target/
+dist/
+.env
+.env.*
+*.db
+*.db-shm
+*.db-wal
+*.sqlite*
+*.sappbackup
+*.pem
+*.key
+apps/desktop/src-tauri/gen/
+test-results/
+playwright-report/
+.DS_Store
+__pycache__/
+*.audit.jsonl.gz
+output/playwright/
+
+# Internal planning and implementation notes stay local.
+/CONTEXT.md
+/docs/phase-*.md
+/docs/slice-*.md
+/docs/adr/
+/.local/

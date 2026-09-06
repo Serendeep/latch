@@ -1,0 +1,6 @@
+# Documentation only; configuration loading is not implemented in slice 1.
+# Keep credential values out of this file.
+project = "."
+environment = "development"
+names = ["SERVICE_TOKEN"]
+command = ["node", "--version"]

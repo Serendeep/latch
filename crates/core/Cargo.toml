@@ -1,0 +1,22 @@
+[package]
+name = "latch-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[features]
+bindings = ["dep:ts-rs"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+ts-rs = { version = "=12.0.1", optional = true }
+
+[[example]]
+name = "export_bindings"
+required-features = ["bindings"]
+
+[lints]
+workspace = true
