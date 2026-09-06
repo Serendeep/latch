@@ -59,7 +59,7 @@ mise exec -- pnpm build
 mise exec -- cargo build -p latch-desktop --features custom-protocol --locked
 ```
 
-The Linux native smoke test requires `tauri-driver` 2.0.6, `WebKitWebDriver`, and `xvfb-run` on PATH. With those installed, run `dbus-run-session -- xvfb-run -a python3 tests/native_smoke.py`. The fresh D-Bus session avoids interference from the runner's desktop services. The test checks real status IPC and rejection of an ungranted command. Browser tests do not cover that boundary.
+The Linux native smoke test requires `tauri-driver` 2.0.6, `WebKitWebDriver`, and `xvfb-run` on PATH. With those installed, run `GDK_BACKEND=x11 xvfb-run -a python3 tests/linux_keyring.py --native`. The fresh D-Bus session avoids interference from the runner's desktop services. The test checks real status IPC and rejection of an ungranted command. Browser tests do not cover that boundary.
 
 CI also runs `pnpm audit`, cargo-audit 0.22.2, and Gitleaks 8.30.1. Dependency warnings must be reviewed; a zero exit code alone does not establish safety.
 
@@ -79,3 +79,9 @@ Internal phase plans, implementation reviews, ADR drafts, and local working note
 Release automation will use [release-please](https://github.com/googleapis/release-please-action) once Latch reaches a releasable milestone. It will prepare version and changelog updates in release PRs. Packaging and signing will be connected when those platform requirements are ready. No release workflow is enabled for the current scaffold.
 
 Use Conventional Commit titles for new changes, such as `feat: add project selection`, `fix: reject invalid variable names`, and `docs: clarify setup`. This prepares the history for automated release notes. Do not create release tags or publish binaries before the release process is qualified.
+
+### Linux vault integration tests
+
+Install GNOME Keyring, `busctl`, and `fusermount3` in addition to the desktop prerequisites. Run `python3 tests/linux_keyring.py` for create/unlock/cancel/reopen against a disposable keyring. Run `python3 tests/linux_keyring.py --blank` for rejection of an unprotected file format. The native command above exercises the actual webview in the same isolated environment. These tests generate their own fake passphrases and never access the developer's existing keyring entries. Do not run the ignored Rust keyring test directly against your login session.
+
+Browser tests mock only metadata and operation receipts. Keep screenshots, traces, snapshots, and verbose IPC logs disabled when entering passphrases. README captures must use empty fields.

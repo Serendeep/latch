@@ -6,6 +6,10 @@ Notable changes to Latch are recorded here. No public release has been published
 
 ### Added
 
+- Linux empty-vault creation, passphrase unlocking, and locking through narrowly scoped desktop commands.
+- Authenticated wrapped-key persistence in SQLite, explicit GNOME login-keyring access, durable nonce reservations, and bootstrap audit events.
+- Tests for passphrase/tamper rejection, transaction rollback, interrupted setup, stale unlock cancellation, real GNOME Keyring, and native desktop flows.
+
 - Tauri desktop scaffold with native system-themed window decorations and light, dark, and system content appearance.
 - A shared Rust request contract and CLI that validates requests and refuses execution until the broker is implemented.
 - Strict TypeScript 7, Oxlint, and toolchains managed through mise and pnpm.
@@ -15,6 +19,6 @@ Notable changes to Latch are recorded here. No public release has been published
 
 ### Not yet available
 
-- Encrypted vault storage and OS credential-store integration.
+- macOS and Windows vault operations pending credential-store qualification.
 - Secret entry, approval, and process injection.
 - Agent integrations, audit archives, and portable backups.

@@ -8,13 +8,17 @@ test("keyboard navigation, light/dark accessibility, and narrow layout", async (
   await page.addInitScript(() => {
     Object.defineProperty(window, "__TAURI_INTERNALS__", {
       value: {
-        invoke: async () => ({ protocol_version: 1, vault: "unavailable" }),
+        invoke: async () => ({
+          protocol_version: 1,
+          lock_epoch: "0",
+          vault: "absent",
+        }),
       },
     });
   });
   await page.goto("/");
   await expect(page.getByRole("status")).toContainText(
-    "Vault setup is not available",
+    "Create your local vault.",
   );
   await page.keyboard.press("Tab");
   await expect(
@@ -35,5 +39,5 @@ test("keyboard navigation, light/dark accessibility, and narrow layout", async (
       () => document.documentElement.scrollWidth <= innerWidth,
     ),
   ).toBe(true);
-  await expect(page.locator("input")).toHaveCount(0);
+  await expect(page.locator("input")).toHaveCount(2);
 });

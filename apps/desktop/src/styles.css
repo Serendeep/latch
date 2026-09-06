@@ -15,6 +15,7 @@ body {
   margin: 0;
 }
 button,
+input,
 select {
   font: inherit;
 }
@@ -212,4 +213,20 @@ footer {
   .theme-control {
     gap: 0.4rem;
   }
+}
+
+.passphrase-field {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 1.25rem;
+  font-size: 0.85rem;
+}
+.passphrase-field input {
+  width: 100%;
+  min-width: 0;
+  padding: 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 0.35rem;
+  color: var(--text);
+  background: var(--background);
 }

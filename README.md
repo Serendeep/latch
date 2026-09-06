@@ -10,9 +10,13 @@ Latch is being built around a simple workflow: an agent requests named credentia
 
 ## Status
 
-**Early development. This build cannot store or use secrets.**
+**Early development. Linux vault setup works; project secrets and command delivery are not available yet.**
 
-The current application provides a desktop window with system, light, and dark appearance, plus a CLI that validates requests and refuses to launch them. Encrypted storage, approval dialogs, process injection, and audit archives are planned. Claude Code and Codex integrations have not yet been tested.
+On Linux, you can create an empty encrypted vault, unlock it with a separate Latch passphrase, and lock it again. The first credential-store adapter requires GNOME Keyring’s unlocked, password-protected login collection. macOS and Windows vault operations remain unavailable pending native credential-store qualification.
+
+Vault keys stay in Rust. SQLite stores the authenticated wrapped key; the GNOME login keyring stores separate random device material. Unlocking requires both that material and the passphrase. The vault locks after five minutes, and explicit locking cancels outstanding unlock attempts. Bootstrap audit records cover creation, unlock outcomes, and locking. Weekly archives are not implemented yet.
+
+The desktop follows system, light, or dark appearance. The CLI still validates requests and refuses to launch them. Claude Code and Codex integrations have not yet been tested.
 
 Planned capabilities include:
 
@@ -26,14 +30,14 @@ Latch is not a general password manager or a replacement for an enterprise secre
 
 ## Preview
 
-The current interface in dark and light mode. These captures show application content; native title bars vary by operating system. They show the actual development UI, not a completed vault or approval flow.
+The current interface in dark and light mode. These captures show application content; native title bars vary by operating system. They show the development vault-creation interface; approval and secret-management screens are not available yet.
 
-![Latch in dark mode, showing that vault setup is not yet available](docs/assets/latch-dark.png)
+![Latch in dark mode, showing the empty vault-creation form](docs/assets/latch-dark.png)
 
 <details>
 <summary>Light appearance</summary>
 
-![Latch in light mode, showing that vault setup is not yet available](docs/assets/latch-light.png)
+![Latch in light mode, showing the empty vault-creation form](docs/assets/latch-light.png)
 
 </details>
 
@@ -53,6 +57,20 @@ mise exec -- pnpm desktop:dev
 The stack is Tauri 2, React, strict TypeScript 7, and Rust. mise pins Node, pnpm, and Rust; pnpm manages frontend dependencies. The title bar uses native window decorations and follows the system theme. The Appearance control changes the application content independently. On Linux, native appearance depends on the desktop's GTK theme and portal settings.
 
 The Checks badge links to Linux, macOS, and Windows build results. A passing build does not qualify platform key-store behavior or native user journeys. Linux has also been exercised locally. There are no signed releases or automatic updates.
+
+## Linux vault setup
+
+Run the desktop app, enter and confirm a separate passphrase of at least 15 characters, and choose **Create vault**. Creation finishes locked. Enter the same passphrase to unlock. The fields are concealed and cleared after submission; passphrases are never trimmed. There is no password reset or backup recovery in this build. Do not use it for real credentials yet.
+
+The current adapter checks for `/usr/bin/gnome-keyring-daemon`, the login collection, and its protected on-disk format before storing material. A missing, locked, plaintext, or unsupported store is rejected. Unlock the login keyring through your desktop's password manager and retry. Latch does not change that collection's password or unlock it automatically.
+
+The vault directory is `$XDG_DATA_HOME/local.latch.development/vault`, or `~/.local/share/local.latch.development/vault` when `XDG_DATA_HOME` is unset. It is separate from webview storage, private to your user, and restricted to one broker process. Do not edit or copy individual SQLite sidecar files while Latch is running.
+
+### Interrupted first setup
+
+Latch preserves an incomplete setup instead of overwriting it. Quit Latch and preserve the entire `vault` directory for inspection. For an empty development vault that has never held project secrets, you can rename that directory and restart Latch to create a fresh one. This creates a new vault; it does not recover the old one. An interrupted setup may leave an unused OS keyring item. Do not delete keyring items whose association you have not verified.
+
+If a previously created vault fails to unlock, preserve its directory and OS keyring item. Renaming files, changing the keyring password to empty, or deleting device material will not recover its passphrase.
 
 ## CLI preview
 

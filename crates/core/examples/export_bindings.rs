@@ -11,6 +11,12 @@ fn main() {
         VaultAvailability::decl(&ts_rs::Config::default()),
         AppStatus::decl(&ts_rs::Config::default())
     );
+    let content = content
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
     if std::env::args().any(|arg| arg == "--check") {
         if fs::read_to_string(path).ok().as_deref() != Some(content.as_str()) {
             eprintln!("Generated types are stale. Run pnpm bindings.");
