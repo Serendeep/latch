@@ -73,3 +73,9 @@ CI also runs `pnpm audit`, cargo-audit 0.22.2, and Gitleaks 8.30.1. Dependency w
 - Update public documentation for behavior users and contributors need to understand.
 
 Internal phase plans, implementation reviews, ADR drafts, and local working notes are excluded through `.gitignore`. Keep new private notes under `.local/`. Do not force-add ignored notes or reference them from public documentation. Files intentionally intended for public documentation may live under `docs/` outside the ignored internal patterns.
+
+## Releases
+
+Release automation will use [release-please](https://github.com/googleapis/release-please-action) once Latch reaches a releasable milestone. It will prepare version and changelog updates in release PRs. Packaging and signing will be connected when those platform requirements are ready. No release workflow is enabled for the current scaffold.
+
+Use Conventional Commit titles for new changes, such as `feat: add project selection`, `fix: reject invalid variable names`, and `docs: clarify setup`. This prepares the history for automated release notes. Do not create release tags or publish binaries before the release process is qualified.

@@ -51,8 +51,6 @@ jobs:
           pnpm exec playwright install --with-deps chromium
           pnpm test:ui
       - name: Native Linux bridge and permission smoke test
-        env:
-          WEBKIT_DISABLE_DMABUF_RENDERER: "1"
         if: runner.os == 'Linux'
         run: |
           cargo install tauri-driver --version 2.0.6 --locked
