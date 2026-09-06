@@ -26,7 +26,8 @@ def main():
         if shutil.which(binary) is None:
             raise SystemExit(f"Native smoke test requires {binary} on PATH")
     session = None
-    with subprocess.Popen(["tauri-driver", "--port", "4444"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) as driver:
+    # This test opens only the credential-free scaffold. Preserve native startup diagnostics.
+    with subprocess.Popen(["tauri-driver", "--port", "4444"], stdout=subprocess.DEVNULL) as driver:
         try:
             for _ in range(100):
                 try:
@@ -45,8 +46,14 @@ def main():
             assert result["value"] == {"protocol_version": 1, "vault": "unavailable"}, "Native metadata bridge failed"
             result = request("POST", prefix + "/execute/async", {"script": "const done = arguments[arguments.length - 1]; window.__TAURI_INTERNALS__.invoke('plugin:window|set_title', {label: 'main', title: 'unexpected'}).then(() => done('allowed'), () => done('denied'));", "args": []})
             assert result["value"] == "denied", "Ungranted native command succeeded"
-            result = request("POST", prefix + "/execute/sync", {"script": "return document.querySelector('output.status').textContent;", "args": []})
-            assert result["value"] == "Vault setup is not available in this build.", "Native UI did not render the actual state"
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                result = request("POST", prefix + "/execute/sync", {"script": "return document.querySelector('output.status')?.textContent === 'Vault setup is not available in this build.';", "args": []})
+                if result["value"] is True:
+                    break
+                time.sleep(0.1)
+            else:
+                raise AssertionError("Native UI did not render the actual state")
             print("Passed: native status IPC, ungranted command denied, actual UI availability.")
         finally:
             if session:
