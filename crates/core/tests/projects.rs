@@ -134,7 +134,9 @@ fn rejects_invalid_metadata_and_stale_edits_without_partial_changes() {
 #[cfg(unix)]
 #[test]
 fn resolves_symlinks_and_rejects_lossy_or_control_character_paths() {
-    use std::os::unix::{ffi::OsStringExt, fs::symlink};
+    #[cfg(target_os = "linux")]
+    use std::os::unix::ffi::OsStringExt;
+    use std::os::unix::fs::symlink;
     let directory = tempfile::tempdir().expect("test directory unavailable");
     let target = directory.path().join("target");
     std::fs::create_dir(&target).unwrap();
@@ -143,8 +145,10 @@ fn resolves_symlinks_and_rejects_lossy_or_control_character_paths() {
     let project = Project::create("Example".into(), &link).unwrap();
     assert!(project.directory() == target.canonicalize().unwrap().to_str().unwrap());
     for component in [
+        // macOS filesystems reject this filename before Latch can inspect it.
+        #[cfg(target_os = "linux")]
         std::ffi::OsString::from_vec(vec![0xff]),
-        "line\nbreak".into(),
+        std::ffi::OsString::from("line\nbreak"),
     ] {
         let path = directory.path().join(component);
         std::fs::create_dir(&path).unwrap();
