@@ -10,17 +10,16 @@ Latch is being built around a simple workflow: an agent requests named credentia
 
 ## Status
 
-**Early development. Linux vault setup works; project secrets and command delivery are not available yet.**
+**Early development. Linux vault and encrypted project management are implemented; secret values and command delivery are not available yet.**
 
 On Linux, you can create an empty encrypted vault, unlock it with a separate Latch passphrase, and lock it again. The first credential-store adapter requires GNOME Keyring’s unlocked, password-protected login collection. macOS and Windows vault operations remain unavailable pending native credential-store qualification.
 
-Vault keys stay in Rust. SQLite stores the authenticated wrapped key; the GNOME login keyring stores separate random device material. Unlocking requires both that material and the passphrase. The vault locks after five minutes, and explicit locking cancels outstanding unlock attempts. Bootstrap audit records cover creation, unlock outcomes, and locking. Weekly archives are not implemented yet.
+Vault keys stay in Rust. SQLite stores the authenticated wrapped key and encrypted project metadata; the GNOME login keyring stores separate random device material. Unlocking requires both that material and the passphrase. The vault locks after five minutes, and explicit locking cancels outstanding unlock attempts. Audit records cover vault creation, unlock outcomes, locking, and project/environment changes. Weekly archives are not implemented yet.
 
 The desktop follows system, light, or dark appearance. The CLI still validates requests and refuses to launch them. Claude Code and Codex integrations have not yet been tested.
 
 Planned capabilities include:
 
-- A local encrypted vault organized by project and environment.
 - Deliberate approval before a command receives selected secrets.
 - An agent-neutral CLI for local coding tools.
 - Metadata-only audit history with weekly compressed archives, retaining three archives by default. Both settings will be configurable.
@@ -30,7 +29,7 @@ Latch is not a general password manager or a replacement for an enterprise secre
 
 ## Preview
 
-Development preview of project and environment management in dark and light mode, captured from the current UI with example metadata and a simulated unlocked vault. This work is not yet included in the published source. No credentials are shown. These captures show application content; native title bars vary by operating system.
+Development preview of project and environment management in dark and light mode, captured from the current UI with example metadata and a simulated unlocked vault. Approval and secret-value management are not implemented yet. No credentials are shown. These captures show application content; native title bars vary by operating system.
 
 ![Latch in dark mode, showing the Orbit API example project and its four environments](docs/assets/latch-dark.png)
 
@@ -65,6 +64,14 @@ Run the desktop app, enter and confirm a separate passphrase of at least 15 char
 The current adapter checks for `/usr/bin/gnome-keyring-daemon`, the login collection, and its protected on-disk format before storing material. A missing, locked, plaintext, or unsupported store is rejected. Unlock the login keyring through your desktop's password manager and retry. Latch does not change that collection's password or unlock it automatically.
 
 The vault directory is `$XDG_DATA_HOME/local.latch.development/vault`, or `~/.local/share/local.latch.development/vault` when `XDG_DATA_HOME` is unset. It is separate from webview storage, private to your user, and restricted to one broker process. Do not edit or copy individual SQLite sidecar files while Latch is running.
+
+### Projects and environments
+
+After unlocking, enter a project name and choose its directory through the native folder picker. Review the canonical path, then choose **Create project**. The Linux picker uses GTK through the Tauri dialog plugin. Its acceptance flow still needs native qualification; the headless automation attempt did not complete.
+
+Each project starts with development, test, staging, and production. Use **Current project** to switch between projects on the current page. The vault supports 100 projects, shown in pages of 20. Names and directory bindings must be unique; names are compared without ASCII case distinctions.
+
+Renaming preserves the directory binding. Removing an environment requires confirmation; recreating it gives it a fresh identity. Deleting a project removes its vault metadata and preserves the workspace directory and audit history. There is no undo or directory-rebinding flow yet. A directory association supplies context for future command approval; it is not a filesystem sandbox.
 
 ### Interrupted first setup
 

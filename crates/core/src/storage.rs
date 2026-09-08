@@ -1,4 +1,4 @@
-//! Single-owner SQLite persistence. SQLite only receives wrapped key material.
+//! Single-owner SQLite persistence. SQLite receives ciphertext and allowlisted audit metadata.
 use crate::{broker::BrokerError, vault::WrappedVaultKey};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, config::DbConfig, params};
 use std::{
@@ -96,11 +96,14 @@ impl Database {
             tx.commit()?;
             file.sync_all()?;
             File::open(directory)?.sync_all()?;
-        } else if version != 1 || app != 1279349827 {
+        } else if !(1..=2).contains(&version) || app != 1279349827 {
             return Err(BrokerError::StorageUnavailable);
         }
         let expected = Connection::open_in_memory()?;
         expected.execute_batch(include_str!("../migrations/0001_initial.up.sql"))?;
+        if version == 2 {
+            expected.execute_batch(include_str!("../migrations/0002_projects.up.sql"))?;
+        }
         if schema(&connection)? != schema(&expected)? {
             return Err(BrokerError::StorageUnavailable);
         }
@@ -111,6 +114,17 @@ impl Database {
         let invalid_fk = connection.prepare("PRAGMA foreign_key_check")?.exists([])?;
         if invalid_fk {
             return Err(BrokerError::StorageUnavailable);
+        }
+        if version < 2 {
+            let tx = connection.transaction()?;
+            tx.execute_batch(include_str!("../migrations/0002_projects.up.sql"))?;
+            tx.commit()?;
+            expected.execute_batch(include_str!("../migrations/0002_projects.up.sql"))?;
+            if schema(&connection)? != schema(&expected)? {
+                return Err(BrokerError::StorageUnavailable);
+            }
+            file.sync_all()?;
+            File::open(directory)?.sync_all()?;
         }
         connection.execute_batch("PRAGMA journal_mode=WAL;")?;
         let db = Self {
@@ -222,7 +236,7 @@ pub(crate) fn now_ms() -> i64 {
 
 fn schema(connection: &Connection) -> Result<Vec<(String, String, String)>, BrokerError> {
     let mut query = connection.prepare(
-        "SELECT type,name,coalesce(sql,'') FROM sqlite_schema ORDER BY type,name LIMIT 16",
+        "SELECT type,name,coalesce(sql,'') FROM sqlite_schema ORDER BY type,name LIMIT 32",
     )?;
     Ok(query
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
@@ -322,6 +336,9 @@ mod tests {
         )
         .expect("private directory failed");
         let mut db = Database::open(dir.path()).expect("open failed");
+        db.connection
+            .execute_batch("DROP TABLE projects;")
+            .expect("project table cleanup failed");
         db.connection
             .execute_batch(include_str!("../migrations/0001_initial.down.sql"))
             .expect("down failed");

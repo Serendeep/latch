@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-environment-create"
+description = "Enables the environment_create command without any pre-configured scope."
+commands.allow = ["environment_create"]
+
+[[permission]]
+identifier = "deny-environment-create"
+description = "Denies the environment_create command without any pre-configured scope."
+commands.deny = ["environment_create"]

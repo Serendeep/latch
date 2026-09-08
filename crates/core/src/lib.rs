@@ -3,6 +3,9 @@
 pub mod broker;
 #[cfg(target_os = "linux")]
 mod keystore;
+pub mod project;
+#[cfg(target_os = "linux")]
+mod project_store;
 pub mod protocol;
 #[cfg(target_os = "linux")]
 mod storage;

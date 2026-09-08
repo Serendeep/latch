@@ -6,6 +6,13 @@ fn main() {
             "vault_create",
             "vault_unlock",
             "vault_lock",
+            "project_choose_directory",
+            "projects_list",
+            "project_create",
+            "project_rename",
+            "project_delete",
+            "environment_create",
+            "environment_delete",
         ]),
     ))
     .expect("Could not build desktop configuration");

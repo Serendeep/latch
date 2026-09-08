@@ -7,6 +7,14 @@ use std::path::PathBuf;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BrokerError {
+    /// Project input failed validation.
+    InvalidProject,
+    /// Project metadata changed since it was reviewed.
+    RevisionConflict,
+    /// A project with this name or canonical directory already exists.
+    ProjectExists,
+    /// The vault already contains 100 projects.
+    ProjectLimit,
     /// This platform has not been qualified for vault storage.
     Unsupported,
     /// A request cannot be accepted while work is in progress.
@@ -29,6 +37,63 @@ pub enum BrokerError {
     Cancelled,
     /// An interrupted creation needs manual inspection; data was preserved.
     RecoveryRequired,
+}
+
+impl From<crate::project::ProjectError> for BrokerError {
+    fn from(error: crate::project::ProjectError) -> Self {
+        use crate::project::ProjectError;
+        match error {
+            ProjectError::RevisionConflict | ProjectError::RevisionExhausted => {
+                Self::RevisionConflict
+            }
+            ProjectError::RandomUnavailable => Self::StorageUnavailable,
+            _ => Self::InvalidProject,
+        }
+    }
+}
+
+/// Typed internal operations constructed by narrowly scoped desktop commands.
+/// This enum is deliberately not deserializable as an IPC command.
+pub enum ProjectCommand {
+    /// Return up to twenty projects after an optional opaque cursor.
+    List {
+        /// Last returned project ID.
+        cursor: Option<String>,
+    },
+    /// Consume a native directory selection.
+    Create {
+        /// Display name.
+        name: String,
+        /// Single-use chooser token.
+        token: String,
+    },
+    /// Change a project name without rebinding its directory.
+    Rename {
+        /// Project identity.
+        id: String,
+        /// Expected decimal revision.
+        revision: String,
+        /// New display name.
+        name: String,
+    },
+    /// Delete a reviewed project. IPC adapter must require explicit confirmation.
+    Delete {
+        /// Project identity.
+        id: String,
+        /// Expected decimal revision.
+        revision: String,
+    },
+    /// Create or delete one immutable environment kind.
+    Environment {
+        /// Project identity.
+        id: String,
+        /// Expected decimal revision.
+        revision: String,
+        /// Explicit scope.
+        kind: protocol::Environment,
+        /// True to recreate a missing kind.
+        add: bool,
+    },
 }
 
 impl From<std::io::Error> for BrokerError {
@@ -108,6 +173,66 @@ impl Broker {
             Err(BrokerError::Unsupported)
         }
     }
+    /// Register a native chooser result. No IPC command accepts a caller's path.
+    pub fn select_directory(
+        &self,
+        path: PathBuf,
+        epoch: String,
+    ) -> Result<crate::project::DirectorySelection, BrokerError> {
+        #[cfg(target_os = "linux")]
+        {
+            self.inner.select_directory(path, epoch)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (path, epoch);
+            Err(BrokerError::Unsupported)
+        }
+    }
+
+    /// Execute a metadata operation on the single database worker.
+    pub fn projects(
+        &self,
+        command: ProjectCommand,
+        epoch: String,
+    ) -> Result<crate::project::ProjectPage, BrokerError> {
+        match &command {
+            ProjectCommand::Create { name, token } => {
+                if name.len() > 512 {
+                    return Err(BrokerError::InvalidProject);
+                }
+                crate::project::parse_id(token)?;
+            }
+            ProjectCommand::Rename { id, revision, name } => {
+                crate::project::parse_id(id)?;
+                if name.len() > 512 || revision.len() > 19 {
+                    return Err(BrokerError::InvalidProject);
+                }
+            }
+            ProjectCommand::Delete { id, revision }
+            | ProjectCommand::Environment { id, revision, .. } => {
+                crate::project::parse_id(id)?;
+                if revision.len() > 19 {
+                    return Err(BrokerError::InvalidProject);
+                }
+            }
+            ProjectCommand::List { cursor } => {
+                if let Some(cursor) = cursor {
+                    crate::project::parse_id(cursor)?;
+                }
+            }
+        }
+        #[cfg(target_os = "linux")]
+        {
+            self.inner.projects(command, epoch)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (command, epoch);
+            Err(BrokerError::Unsupported)
+        }
+    }
+
     /// Drop the live key and invalidate pending work immediately, even on disk failure.
     pub fn lock(&self) -> Result<AppStatus, BrokerError> {
         #[cfg(target_os = "linux")]
@@ -126,6 +251,8 @@ mod linux {
     use super::*;
     use crate::{
         keystore::KeyStore,
+        project::{DirectorySelection, Project, ProjectPage, hex, parse_id, random_id},
+        project_store::ProjectRow,
         storage::{Database, now_ms},
         vault::{PreparedVault, UnlockTicket, VaultSession},
     };
@@ -145,12 +272,31 @@ mod linux {
         epoch: u64,
         failure: Option<BrokerError>,
         lock_event: Option<i64>,
+        selection: Option<(String, zeroize::Zeroizing<String>, std::time::Instant)>,
     }
-    struct Work {
-        create: bool,
-        password: Passphrase,
-        ticket: UnlockTicket,
-        reply: SyncSender<Result<(), BrokerError>>,
+    impl Shared {
+        fn unlocked(&mut self) -> bool {
+            let had_key = self.session.has_key();
+            let unlocked = self.session.is_unlocked();
+            if had_key && !unlocked {
+                self.selection = None;
+                self.lock_event.get_or_insert_with(now_ms);
+            }
+            unlocked
+        }
+    }
+    enum Work {
+        Vault {
+            create: bool,
+            password: Passphrase,
+            ticket: UnlockTicket,
+            reply: SyncSender<Result<(), BrokerError>>,
+        },
+        Projects {
+            command: ProjectCommand,
+            epoch: u64,
+            reply: SyncSender<Result<ProjectPage, BrokerError>>,
+        },
     }
     pub(super) struct Handle {
         state: Arc<Mutex<Shared>>,
@@ -168,6 +314,7 @@ mod linux {
                 epoch: 0,
                 failure: None,
                 lock_event: None,
+                selection: None,
             }));
             let busy = Arc::new(AtomicBool::new(false));
             let (sender, receiver) = mpsc::sync_channel(1);
@@ -197,7 +344,7 @@ mod linux {
                 return Err(error);
             }
             let had_key = state.session.has_key();
-            let unlocked = state.session.is_unlocked();
+            let unlocked = state.unlocked();
             if had_key && !unlocked && state.lock_event.is_none() {
                 state.lock_event = Some(now_ms());
             }
@@ -246,7 +393,7 @@ mod linux {
                     if !state.ready || create == state.exists {
                         return Err(BrokerError::InvalidState);
                     }
-                    if state.session.is_unlocked() {
+                    if state.unlocked() {
                         return Err(BrokerError::InvalidState);
                     }
                     state
@@ -258,7 +405,7 @@ mod linux {
                 self.sender
                     .as_ref()
                     .ok_or(BrokerError::StorageUnavailable)?
-                    .try_send(Work {
+                    .try_send(Work::Vault {
                         create,
                         password,
                         ticket,
@@ -273,11 +420,92 @@ mod linux {
             result?;
             self.status()
         }
+        pub(super) fn select_directory(
+            &self,
+            path: PathBuf,
+            epoch: String,
+        ) -> Result<DirectorySelection, BrokerError> {
+            let epoch = parse_epoch(&epoch)?;
+            {
+                check_project_state(
+                    &mut *self
+                        .state
+                        .lock()
+                        .map_err(|_| BrokerError::StorageUnavailable)?,
+                    epoch,
+                )?;
+            }
+            let directory = crate::project::checked_directory(&path)?;
+            let token = hex(&random_id()?);
+            let mut shared = self
+                .state
+                .lock()
+                .map_err(|_| BrokerError::StorageUnavailable)?;
+            check_project_state(&mut shared, epoch)?;
+            let result = DirectorySelection {
+                token: token.clone(),
+                directory: directory.to_string(),
+            };
+            shared.selection = Some((token, directory, std::time::Instant::now()));
+            Ok(result)
+        }
+
+        pub(super) fn projects(
+            &self,
+            command: ProjectCommand,
+            epoch: String,
+        ) -> Result<ProjectPage, BrokerError> {
+            let epoch = parse_epoch(&epoch)?;
+            if self
+                .busy
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+            {
+                return Err(BrokerError::Busy);
+            }
+            let result = (|| {
+                {
+                    check_project_state(
+                        &mut *self
+                            .state
+                            .lock()
+                            .map_err(|_| BrokerError::StorageUnavailable)?,
+                        epoch,
+                    )?;
+                }
+                let (reply, receive) = mpsc::sync_channel(1);
+                self.sender
+                    .as_ref()
+                    .ok_or(BrokerError::StorageUnavailable)?
+                    .try_send(Work::Projects {
+                        command,
+                        epoch,
+                        reply,
+                    })
+                    .map_err(|_| BrokerError::Busy)?;
+                let result = receive
+                    .recv()
+                    .map_err(|_| BrokerError::StorageUnavailable)??;
+                // A lock after worker completion still prevents this response's disclosure.
+                check_project_state(
+                    &mut *self
+                        .state
+                        .lock()
+                        .map_err(|_| BrokerError::StorageUnavailable)?,
+                    epoch,
+                )?;
+                Ok(result)
+            })();
+            self.busy.store(false, Ordering::Release);
+            result
+        }
+
         pub(super) fn lock(&self) -> Result<AppStatus, BrokerError> {
             {
                 let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 let active = state.session.has_key() || state.session.has_pending();
                 state.session.lock();
+                state.selection = None;
                 match state.epoch.checked_add(1) {
                     Some(epoch) => state.epoch = epoch,
                     None => state.failure = Some(BrokerError::InvalidState),
@@ -332,26 +560,53 @@ mod linux {
                 }
             };
             flush_locks(&db, &state);
-            let result = operate(&mut db, &state, work.create, work.password, work.ticket);
-            if let Ok(mut shared) = state.lock() {
-                if result.is_err() {
-                    shared.session.lock();
+            match work {
+                Work::Vault {
+                    create,
+                    password,
+                    ticket,
+                    reply,
+                } => {
+                    let result = operate(&mut db, &state, create, password, ticket);
+                    if let Ok(mut shared) = state.lock() {
+                        if result.is_err() {
+                            shared.session.lock();
+                            shared.selection = None;
+                        }
+                        if matches!(
+                            result,
+                            Err(BrokerError::AuditUnavailable | BrokerError::RecoveryRequired)
+                        ) {
+                            shared.failure = result.as_ref().err().copied();
+                        }
+                    }
+                    let _ = reply.send(result);
                 }
-                if matches!(
-                    result,
-                    Err(BrokerError::AuditUnavailable | BrokerError::RecoveryRequired)
-                ) {
-                    shared.failure = result.as_ref().err().copied();
+                Work::Projects {
+                    command,
+                    epoch,
+                    reply,
+                } => {
+                    let result = operate_projects(&mut db, &state, command, epoch);
+                    if matches!(
+                        result,
+                        Err(BrokerError::AuditUnavailable | BrokerError::StorageUnavailable)
+                    ) {
+                        let mut shared = state.lock().unwrap_or_else(|e| e.into_inner());
+                        shared.failure = result.as_ref().err().copied();
+                        shared.session.lock();
+                        shared.selection = None;
+                    }
+                    let _ = reply.send(result);
                 }
             }
-            let _ = work.reply.send(result);
         }
     }
 
     fn flush_locks(db: &Database, state: &Mutex<Shared>) {
         let mut shared = state.lock().unwrap_or_else(|e| e.into_inner());
         let was_unlocked = shared.session.has_key();
-        if was_unlocked && !shared.session.is_unlocked() && shared.lock_event.is_none() {
+        if was_unlocked && !shared.unlocked() && shared.lock_event.is_none() {
             shared.lock_event = Some(now_ms());
         }
         if let Some(time) = shared.lock_event.take()
@@ -359,7 +614,239 @@ mod linux {
         {
             shared.failure = Some(BrokerError::AuditUnavailable);
             shared.session.lock();
+            shared.selection = None;
         }
+    }
+
+    #[test]
+    fn stale_metadata_requests_cannot_consume_a_new_session_selection() {
+        let mut session = VaultSession::default();
+        let ticket = session.begin_unlock().unwrap();
+        assert!(session.complete_unlock(ticket, crate::vault::VaultKey::generate_for_test()));
+        let mut shared = Shared {
+            session,
+            exists: true,
+            ready: true,
+            epoch: 3,
+            failure: None,
+            lock_event: None,
+            selection: Some((
+                "a".repeat(32),
+                zeroize::Zeroizing::new("/tmp/example".into()),
+                std::time::Instant::now(),
+            )),
+        };
+        assert_eq!(
+            check_project_state(&mut shared, 2),
+            Err(BrokerError::Cancelled)
+        );
+        assert!(shared.selection.is_some());
+        assert!(check_project_state(&mut shared, 3).is_ok());
+        shared.session.lock();
+        assert_eq!(
+            check_project_state(&mut shared, 3),
+            Err(BrokerError::Cancelled)
+        );
+        assert!(shared.selection.is_none());
+    }
+
+    fn parse_epoch(value: &str) -> Result<u64, BrokerError> {
+        if value.is_empty() || value.len() > 20 || !value.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(BrokerError::InvalidState);
+        }
+        value.parse().map_err(|_| BrokerError::InvalidState)
+    }
+
+    fn check_project_state(shared: &mut Shared, epoch: u64) -> Result<(), BrokerError> {
+        if let Some(error) = shared.failure {
+            return Err(error);
+        }
+        if shared.epoch != epoch {
+            return Err(BrokerError::Cancelled);
+        }
+        if !shared.unlocked() {
+            shared.selection = None;
+            return Err(BrokerError::Cancelled);
+        }
+        Ok(())
+    }
+
+    fn operate_projects(
+        db: &mut Database,
+        state: &Mutex<Shared>,
+        command: ProjectCommand,
+        epoch: u64,
+    ) -> Result<ProjectPage, BrokerError> {
+        use zeroize::Zeroizing;
+        // Reads are bounded before decoding any encrypted metadata.
+        let cursor = if let ProjectCommand::List { cursor } = &command {
+            cursor.as_deref().map(parse_id).transpose()?
+        } else {
+            None
+        };
+        let listing = matches!(command, ProjectCommand::List { .. });
+        let mut rows = db.project_rows(cursor, if listing { 21 } else { 101 })?;
+        if !listing && rows.len() > 100 {
+            return Err(BrokerError::StorageUnavailable);
+        }
+        let next_cursor = if listing && rows.len() > 20 {
+            rows.pop();
+            rows.last().map(|row| hex(&row.id))
+        } else {
+            None
+        };
+        let mut projects = Vec::with_capacity(rows.len());
+        for row in rows {
+            let mut shared = state.lock().map_err(|_| BrokerError::StorageUnavailable)?;
+            check_project_state(&mut shared, epoch)?;
+            let key = shared.session.key().ok_or(BrokerError::Cancelled)?;
+            if key.key_id() != &row.key_id {
+                return Err(BrokerError::StorageUnavailable);
+            }
+            let mut bytes = Zeroizing::new(row.ciphertext);
+            key.record(false, &row.id, row.revision, &row.nonce, &mut bytes)
+                .map_err(|_| BrokerError::StorageUnavailable)?;
+            projects.push(
+                Project::decode(row.id, row.revision, &bytes)
+                    .map_err(|_| BrokerError::StorageUnavailable)?,
+            );
+        }
+        if listing {
+            check_project_state(
+                &mut *state.lock().map_err(|_| BrokerError::StorageUnavailable)?,
+                epoch,
+            )?;
+            return Ok(ProjectPage {
+                projects: projects.iter().map(Project::summary).collect(),
+                next_cursor,
+            });
+        }
+        db.audit_capacity()?;
+        let (project, previous, operation, environment_id) = match command {
+            ProjectCommand::Create { name, token } => {
+                parse_id(&token)?;
+                if projects.len() >= 100 {
+                    return Err(BrokerError::ProjectLimit);
+                }
+                let directory = {
+                    let mut shared = state.lock().map_err(|_| BrokerError::StorageUnavailable)?;
+                    check_project_state(&mut shared, epoch)?;
+                    let (expected, directory, at) =
+                        shared.selection.take().ok_or(BrokerError::InvalidProject)?;
+                    if token != expected || at.elapsed() >= Duration::from_secs(300) {
+                        return Err(BrokerError::InvalidProject);
+                    }
+                    directory
+                };
+                let project = Project::create(name, std::path::Path::new(directory.as_str()))?;
+                if project.directory() != directory.as_str() {
+                    return Err(BrokerError::InvalidProject);
+                }
+                (project, None, 4, None)
+            }
+            command => {
+                let (id, revision) = match &command {
+                    ProjectCommand::Rename { id, revision, .. }
+                    | ProjectCommand::Delete { id, revision }
+                    | ProjectCommand::Environment { id, revision, .. } => (parse_id(id)?, revision),
+                    _ => return Err(BrokerError::InvalidProject),
+                };
+                let index = projects
+                    .iter()
+                    .position(|p| p.id() == &id)
+                    .ok_or(BrokerError::RevisionConflict)?;
+                let mut project = projects.remove(index);
+                let previous = project.next_revision(revision)? - 1;
+                match command {
+                    ProjectCommand::Delete { .. } => {
+                        let mut shared =
+                            state.lock().map_err(|_| BrokerError::StorageUnavailable)?;
+                        check_project_state(&mut shared, epoch)?;
+                        db.delete_project(&id, previous)?;
+                        return Ok(ProjectPage {
+                            projects: Vec::new(),
+                            next_cursor: None,
+                        });
+                    }
+                    ProjectCommand::Rename { name, revision, .. } => {
+                        project.rename(name, &revision)?;
+                        (project, Some(previous), 5, None)
+                    }
+                    ProjectCommand::Environment {
+                        revision,
+                        kind,
+                        add,
+                        ..
+                    } => {
+                        let removed_id = project
+                            .environments()
+                            .iter()
+                            .find(|e| e.kind() == kind)
+                            .map(|e| *e.id());
+                        if add {
+                            project.add_environment(kind, &revision)?;
+                        } else {
+                            project.remove_environment(kind, &revision)?;
+                        }
+                        let id = if add {
+                            project
+                                .environments()
+                                .iter()
+                                .find(|e| e.kind() == kind)
+                                .map(|e| *e.id())
+                        } else {
+                            removed_id
+                        };
+                        (project, Some(previous), if add { 7 } else { 8 }, id)
+                    }
+                    _ => return Err(BrokerError::InvalidProject),
+                }
+            }
+        };
+        if projects.iter().any(|existing| {
+            existing.name().eq_ignore_ascii_case(project.name())
+                || existing.directory() == project.directory()
+        }) {
+            return Err(BrokerError::ProjectExists);
+        }
+        let key_id = {
+            let mut shared = state.lock().map_err(|_| BrokerError::StorageUnavailable)?;
+            check_project_state(&mut shared, epoch)?;
+            *shared.session.key().ok_or(BrokerError::Cancelled)?.key_id()
+        };
+        let mut nonce = [0; 24];
+        getrandom::fill(&mut nonce).map_err(|_| BrokerError::StorageUnavailable)?;
+        db.reserve_record(&key_id, &nonce)?;
+        let mut bytes = project.encode()?;
+        let revision = project
+            .revision()
+            .parse()
+            .map_err(|_| BrokerError::InvalidProject)?;
+        {
+            let mut shared = state.lock().map_err(|_| BrokerError::StorageUnavailable)?;
+            check_project_state(&mut shared, epoch)?;
+            shared
+                .session
+                .key()
+                .ok_or(BrokerError::Cancelled)?
+                .record(true, project.id(), revision, &nonce, &mut bytes)
+                .map_err(|_| BrokerError::StorageUnavailable)?;
+        }
+        let row = ProjectRow {
+            id: *project.id(),
+            key_id,
+            nonce,
+            revision,
+            ciphertext: bytes.to_vec(),
+        };
+        let mut shared = state.lock().map_err(|_| BrokerError::StorageUnavailable)?;
+        check_project_state(&mut shared, epoch)?;
+        // This short transaction orders the mutation against lock. No KDF or OS prompt.
+        db.save_project(&row, previous, operation, environment_id)?;
+        Ok(ProjectPage {
+            projects: vec![project.summary()],
+            next_cursor: None,
+        })
     }
 
     fn operate(
@@ -438,6 +925,11 @@ mod linux {
             db.audit(now_ms(), 2, if unlocked.is_ok() { 1 } else { 2 })
                 .map_err(|_| BrokerError::AuditUnavailable)?;
             let key = unlocked?;
+            shared.epoch = shared
+                .epoch
+                .checked_add(1)
+                .ok_or(BrokerError::InvalidState)?;
+            shared.selection = None;
             if !shared.session.complete_unlock(ticket, key) {
                 return Err(BrokerError::Cancelled);
             }
@@ -552,6 +1044,153 @@ mod tests {
                 .vault,
             VaultAvailability::Unlocked
         ));
+        let epoch = broker.status().unwrap().lock_epoch;
+        let project_dir = tempfile::tempdir().unwrap();
+        let choice = broker
+            .select_directory(project_dir.path().to_path_buf(), epoch.clone())
+            .unwrap();
+        let old_token = choice.token.clone();
+        let page = broker
+            .projects(
+                ProjectCommand::Create {
+                    name: "Test project".into(),
+                    token: choice.token,
+                },
+                epoch.clone(),
+            )
+            .unwrap();
+        let project_id = page.projects[0].id.clone();
+        assert!(page.projects[0].environments.len() == 4);
+        assert!(
+            broker
+                .projects(
+                    ProjectCommand::Create {
+                        name: "Duplicate".into(),
+                        token: old_token
+                    },
+                    epoch.clone()
+                )
+                .is_err()
+        );
+        let choice = broker
+            .select_directory(project_dir.path().to_path_buf(), epoch.clone())
+            .unwrap();
+        assert!(matches!(
+            broker.projects(
+                ProjectCommand::Create {
+                    name: "Duplicate".into(),
+                    token: choice.token
+                },
+                epoch.clone()
+            ),
+            Err(BrokerError::ProjectExists)
+        ));
+        broker
+            .projects(
+                ProjectCommand::Rename {
+                    id: project_id.clone(),
+                    revision: "1".into(),
+                    name: "Renamed project".into(),
+                },
+                epoch.clone(),
+            )
+            .unwrap();
+        assert!(matches!(
+            broker.projects(
+                ProjectCommand::Delete {
+                    id: project_id.clone(),
+                    revision: "1".into()
+                },
+                epoch.clone()
+            ),
+            Err(BrokerError::RevisionConflict)
+        ));
+        broker
+            .projects(
+                ProjectCommand::Environment {
+                    id: project_id.clone(),
+                    revision: "2".into(),
+                    kind: protocol::Environment::Production,
+                    add: false,
+                },
+                epoch.clone(),
+            )
+            .unwrap();
+        let page = broker
+            .projects(ProjectCommand::List { cursor: None }, epoch.clone())
+            .unwrap();
+        assert!(page.projects.len() == 1 && page.projects[0].environments.len() == 3);
+        broker
+            .projects(
+                ProjectCommand::Environment {
+                    id: project_id.clone(),
+                    revision: "3".into(),
+                    kind: protocol::Environment::Production,
+                    add: true,
+                },
+                epoch.clone(),
+            )
+            .unwrap();
+        let mut extra_projects = Vec::new();
+        for index in 0..99 {
+            let path = project_dir.path().join(index.to_string());
+            std::fs::create_dir(&path).unwrap();
+            let choice = broker.select_directory(path, epoch.clone()).unwrap();
+            let page = broker
+                .projects(
+                    ProjectCommand::Create {
+                        name: format!("Capacity example {index}"),
+                        token: choice.token,
+                    },
+                    epoch.clone(),
+                )
+                .unwrap();
+            extra_projects.push(page.projects[0].id.clone());
+        }
+        let first = broker
+            .projects(ProjectCommand::List { cursor: None }, epoch.clone())
+            .unwrap();
+        assert!(first.projects.len() == 20 && first.next_cursor.is_some());
+        let first_ids: Vec<_> = first.projects.iter().map(|p| p.id.clone()).collect();
+        let second = broker
+            .projects(
+                ProjectCommand::List {
+                    cursor: first.next_cursor,
+                },
+                epoch.clone(),
+            )
+            .unwrap();
+        assert!(
+            second.projects.len() == 20
+                && second.projects.iter().all(|p| !first_ids.contains(&p.id))
+        );
+        let choice = broker
+            .select_directory(project_dir.path().to_path_buf(), epoch.clone())
+            .unwrap();
+        assert!(matches!(
+            broker.projects(
+                ProjectCommand::Create {
+                    name: "Over capacity".into(),
+                    token: choice.token
+                },
+                epoch.clone()
+            ),
+            Err(BrokerError::ProjectLimit)
+        ));
+        for id in extra_projects {
+            broker
+                .projects(
+                    ProjectCommand::Delete {
+                        id,
+                        revision: "1".into(),
+                    },
+                    epoch.clone(),
+                )
+                .unwrap();
+        }
+        let stale_choice = broker
+            .select_directory(project_dir.path().to_path_buf(), epoch.clone())
+            .unwrap();
         let stale_epoch = broker.status().expect("status failed").lock_epoch;
         broker.lock().expect("lock failed");
         assert!(matches!(
@@ -599,6 +1238,39 @@ mod tests {
                 .vault,
             VaultAvailability::Unlocked
         ));
+        let epoch = broker.status().unwrap().lock_epoch;
+        let page = broker
+            .projects(ProjectCommand::List { cursor: None }, epoch.clone())
+            .unwrap();
+        assert!(
+            page.projects.len() == 1
+                && page.projects[0].name == "Renamed project"
+                && page.projects[0].environments.len() == 4
+        );
+        assert!(
+            broker
+                .projects(
+                    ProjectCommand::Create {
+                        name: "Stale selection".into(),
+                        token: stale_choice.token
+                    },
+                    epoch.clone()
+                )
+                .is_err()
+        );
+        broker
+            .projects(
+                ProjectCommand::Delete {
+                    id: project_id,
+                    revision: "4".into(),
+                },
+                epoch.clone(),
+            )
+            .unwrap();
+        assert!(
+            project_dir.path().is_dir(),
+            "project deletion touched the workspace"
+        );
         broker.lock().expect("lock failed");
         drop(broker);
         let db = Database::open(dir.path()).expect("database reopen failed");

@@ -230,3 +230,73 @@ footer {
   color: var(--text);
   background: var(--background);
 }
+
+.projects-panel {
+  margin-top: 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.65rem;
+  background: var(--surface);
+}
+.project-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+.project-path {
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, monospace;
+}
+.project-detail {
+  margin-top: 1.75rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+}
+.project-empty {
+  margin: 2rem 0 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+h3 {
+  font-size: 0.95rem;
+  margin: 1.75rem 0 0.5rem;
+}
+.environment-list {
+  list-style: none;
+  padding: 0;
+  margin: 1rem 0 0;
+}
+.environment-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.8rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.environment-list small {
+  display: block;
+  margin-top: 0.25rem;
+  color: var(--muted);
+}
+.environment-list button {
+  margin: 0;
+}
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+dialog {
+  max-width: min(30rem, calc(100vw - 2rem));
+  border: 1px solid var(--border);
+  border-radius: 0.65rem;
+  padding: 1.5rem;
+  color: var(--text);
+  background: var(--surface);
+}
+dialog p {
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+dialog::backdrop {
+  background: #0008;
+}

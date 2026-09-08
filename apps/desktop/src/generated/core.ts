@@ -13,3 +13,43 @@ lock_epoch: string,
  * Current state of the local vault.
  */
 vault: VaultAvailability, };
+export type Environment = "development" | "test" | "staging" | "production";
+export type ProjectSummary = {
+/**
+ * Opaque lowercase hexadecimal identity.
+ */
+id: string,
+/**
+ * Display name.
+ */
+name: string,
+/**
+ * Confirmed canonical directory.
+ */
+directory: string,
+/**
+ * Decimal revision for optimistic concurrency.
+ */
+revision: string,
+/**
+ * Existing scopes; missing kinds have no fallback.
+ */
+environments: Array<Environment>, };
+export type ProjectPage = {
+/**
+ * Metadata for this page only.
+ */
+projects: Array<ProjectSummary>,
+/**
+ * Last returned ID when another page exists.
+ */
+next_cursor: string | null, };
+export type DirectorySelection = {
+/**
+ * Single-use token, bound to the current unlocked session.
+ */
+token: string,
+/**
+ * Canonical path for explicit review.
+ */
+directory: string, };

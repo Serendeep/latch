@@ -9,7 +9,8 @@ pub const VERSION: u16 = 1;
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
 
 /// One project's explicit credential scope. There is no default/fallback scope.
-#[derive(Clone, Copy, Deserialize, Serialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS))]
 #[serde(rename_all = "lowercase")]
 pub enum Environment {
     /// Local development credentials.

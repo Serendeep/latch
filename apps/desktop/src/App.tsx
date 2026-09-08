@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import Projects from "./Projects";
 import { changeVault, getAppStatus, lockVault } from "./api";
 
 import type { VaultAvailability } from "./generated/core";
@@ -13,7 +14,8 @@ export default function App() {
   const password = useRef<HTMLInputElement>(null);
   const confirmation = useRef<HTMLInputElement>(null);
   const generation = useRef(0);
-  const lockEpoch = useRef("0");
+  const [lockEpoch, setLockEpoch] = useState("0");
+  const locking = useRef(false);
   const [theme, setTheme] = useState<Theme>("system");
 
   useEffect(() => {
@@ -22,13 +24,21 @@ export default function App() {
       const request = generation.current;
       void getAppStatus().then(
         (result) => {
-          if (!cancelled && request === generation.current) {
-            lockEpoch.current = result.lock_epoch;
+          if (
+            !cancelled &&
+            !locking.current &&
+            request === generation.current
+          ) {
+            setLockEpoch(result.lock_epoch);
             setStatus(result.vault);
           }
         },
         (error: unknown) => {
-          if (!cancelled && request === generation.current) {
+          if (
+            !cancelled &&
+            !locking.current &&
+            request === generation.current
+          ) {
             setStatus("error");
             setMessage(publicError(error));
           }
@@ -59,14 +69,14 @@ export default function App() {
     const result = changeVault(
       operation,
       password.current?.value ?? "",
-      lockEpoch.current,
+      lockEpoch,
     );
     if (password.current) password.current.value = "";
     if (confirmation.current) confirmation.current.value = "";
     try {
       const updated = await result;
       if (request === generation.current) {
-        lockEpoch.current = updated.lock_epoch;
+        setLockEpoch(updated.lock_epoch);
         setStatus(updated.vault);
       }
     } catch (error: unknown) {
@@ -78,15 +88,20 @@ export default function App() {
 
   const lock = async () => {
     ++generation.current;
+    locking.current = true;
+    setStatus("locked");
     if (password.current) password.current.value = "";
     if (confirmation.current) confirmation.current.value = "";
     try {
       const updated = await lockVault();
-      lockEpoch.current = updated.lock_epoch;
+      setLockEpoch(updated.lock_epoch);
       setStatus(updated.vault);
       setMessage("");
     } catch (error: unknown) {
+      setStatus("error");
       setMessage(publicError(error));
+    } finally {
+      locking.current = false;
     }
   };
 
@@ -136,7 +151,7 @@ export default function App() {
                 : status === "locked"
                   ? "Enter your Latch passphrase to unlock this device’s vault."
                   : status === "unlocked"
-                    ? "The vault locks after five minutes. Project and secret management are coming next."
+                    ? "The vault locks after five minutes. Project names and directories are encrypted on this device."
                     : status === "unavailable"
                       ? "Vault setup is not available on this platform yet."
                       : "Key operations stay in the desktop app."}
@@ -218,6 +233,9 @@ export default function App() {
             ) : null}
           </div>
         </section>
+        {status === "unlocked" ? (
+          <Projects key={lockEpoch} epoch={lockEpoch} />
+        ) : null}
         <p className="scope-note">
           A command receiving a secret can read and share it. Approval controls
           delivery, not what that command does afterward.

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-environment-delete"
+description = "Enables the environment_delete command without any pre-configured scope."
+commands.allow = ["environment_delete"]
+
+[[permission]]
+identifier = "deny-environment-delete"
+description = "Denies the environment_delete command without any pre-configured scope."
+commands.deny = ["environment_delete"]

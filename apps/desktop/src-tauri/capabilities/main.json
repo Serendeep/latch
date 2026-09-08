@@ -1,12 +1,19 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main",
-  "description": "The local main window may read vault state, create, unlock, and lock its vault.",
+  "description": "The local main window may manage its vault and project metadata through scoped commands.",
   "windows": ["main"],
   "permissions": [
     "allow-app-status",
     "allow-vault-create",
     "allow-vault-unlock",
-    "allow-vault-lock"
+    "allow-vault-lock",
+    "allow-project-choose-directory",
+    "allow-projects-list",
+    "allow-project-create",
+    "allow-project-rename",
+    "allow-project-delete",
+    "allow-environment-create",
+    "allow-environment-delete"
   ]
 }

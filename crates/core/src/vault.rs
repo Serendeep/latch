@@ -71,7 +71,50 @@ impl DeviceKey {
 }
 
 /// A decrypted vault key. It has no debug, clone, or serialization implementation.
-pub struct VaultKey(Zeroizing<Vec<u8>>);
+pub struct VaultKey(Zeroizing<Vec<u8>>, [u8; 16], [u8; 16]);
+
+#[cfg(target_os = "linux")]
+impl VaultKey {
+    #[cfg(test)]
+    pub(crate) fn generate_for_test() -> Self {
+        PreparedVault::generate().expect("test RNG failed").key
+    }
+
+    pub(crate) fn key_id(&self) -> &[u8; 16] {
+        &self.2
+    }
+
+    pub(crate) fn record(
+        &self,
+        encrypt: bool,
+        id: &[u8; 16],
+        revision: i64,
+        nonce: &[u8; 24],
+        buffer: &mut Zeroizing<Vec<u8>>,
+    ) -> Result<(), VaultError> {
+        if revision < 1 || buffer.len() > 65536 || (!encrypt && buffer.len() < 16) {
+            return Err(VaultError::InvalidRecord);
+        }
+        // Fixed encoding: format 1, project metadata purpose 1, then six IDs.
+        // The project is its own envelope/object; unused environment is zero.
+        let mut aad = Vec::with_capacity(118);
+        aad.extend_from_slice(b"latch-record");
+        aad.extend_from_slice(&[1, 1]);
+        for field in [&self.1, &self.2, id, id, &[0; 16], id] {
+            aad.extend_from_slice(field);
+        }
+        aad.extend_from_slice(&(revision as u64).to_be_bytes());
+        let cipher =
+            XChaCha20Poly1305::new_from_slice(&self.0).map_err(|_| VaultError::InvalidRecord)?;
+        let nonce = chacha20poly1305::XNonce::from(*nonce);
+        if encrypt {
+            cipher.encrypt_in_place(&nonce, &aad, &mut **buffer)
+        } else {
+            cipher.decrypt_in_place(&nonce, &aad, &mut **buffer)
+        }
+        .map_err(|_| VaultError::InvalidRecord)
+    }
+}
 
 /// Fixed-size public header and authenticated ciphertext; contains no plaintext key.
 pub struct WrappedVaultKey([u8; FRAME]);
@@ -122,7 +165,15 @@ impl WrappedVaultKey {
         if plaintext.len() != 32 {
             return Err(VaultError::UnlockFailed);
         }
-        Ok(VaultKey(plaintext))
+        Ok(VaultKey(
+            plaintext,
+            self.0[10..26]
+                .try_into()
+                .map_err(|_| VaultError::InvalidRecord)?,
+            self.0[26..42]
+                .try_into()
+                .map_err(|_| VaultError::InvalidRecord)?,
+        ))
     }
 }
 
@@ -151,7 +202,15 @@ impl PreparedVault {
         random(&mut *device.0)?;
         let mut buffer = Zeroizing::new(Vec::with_capacity(48));
         buffer.resize(32, 0);
-        let mut key = VaultKey(buffer);
+        let mut key = VaultKey(
+            buffer,
+            header[10..26]
+                .try_into()
+                .map_err(|_| VaultError::InvalidRecord)?,
+            header[26..42]
+                .try_into()
+                .map_err(|_| VaultError::InvalidRecord)?,
+        );
         random(&mut key.0)?;
         Ok(Self {
             header,
@@ -263,6 +322,14 @@ impl VaultSession {
     #[cfg(target_os = "linux")]
     pub(crate) fn is_current(&self, ticket: &UnlockTicket) -> bool {
         Arc::ptr_eq(&self.identity, &ticket.1) && self.pending == Some(ticket.0)
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn key(&mut self) -> Option<&VaultKey> {
+        if !self.is_unlocked() {
+            return None;
+        }
+        self.key.as_ref()
     }
 
     /// Start a new attempt, superseding previous work and dropping any live key.

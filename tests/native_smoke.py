@@ -41,12 +41,24 @@ const done = arguments[arguments.length - 1];
   await wait(() => document.querySelector('input'));
   fill(passphrase); submit();
   await wait(() => status() === 'Your vault is unlocked.');
+  const invoke = window.__TAURI_INTERNALS__.invoke;
+  const current = await invoke('app_status');
+  const projects = await invoke('projects_list', { cursor: null, lockEpoch: current.lock_epoch });
+  if (projects.projects.length !== 0) throw new Error('unexpected project state');
+  let invalidSelectionDenied = false;
+  try { await invoke('project_create', { name: 'Invalid selection', token: '0'.repeat(32), lockEpoch: current.lock_epoch }); }
+  catch { invalidSelectionDenied = true; }
+  if (!invalidSelectionDenied) throw new Error('unselected directory accepted');
   [...document.querySelectorAll('button')].find(b => b.textContent === 'Lock vault').click();
   await wait(() => status() === 'Your vault is locked.' && document.querySelector('input'));
   fill(passphrase); submit();
   await wait(() => [...document.querySelectorAll('button')].some(b => b.textContent === 'Cancel and lock'));
   [...document.querySelectorAll('button')].find(b => b.textContent === 'Cancel and lock').click();
   await wait(() => status() === 'Your vault is locked.');
+  let lockedListDenied = false;
+  try { await invoke('projects_list', { cursor: null, lockEpoch: current.lock_epoch }); }
+  catch { lockedListDenied = true; }
+  if (!lockedListDenied || document.querySelector('.projects-panel')) throw new Error('locked metadata exposed');
   passphrase = '';
   done(true);
 })().catch(() => done(false));
@@ -107,7 +119,7 @@ def main():
                 request("POST", prefix + "/timeouts", {"script": 90000})
                 result = request("POST", prefix + "/execute/async", {"script": VAULT_FLOW, "args": []})
                 assert result["value"] is True, "Native vault flow failed"
-                print("Passed: native create, wrong passphrase, unlock, lock, and cancellation.")
+                print("Passed: native vault lifecycle, project listing, invalid selection denial, and lock clearing.")
             print("Passed: native status IPC, ungranted command denied, actual UI availability.")
         finally:
             if session:
