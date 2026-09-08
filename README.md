@@ -30,14 +30,14 @@ Latch is not a general password manager or a replacement for an enterprise secre
 
 ## Preview
 
-The current interface in dark and light mode. These captures show application content; native title bars vary by operating system. They show the development vault-creation interface; approval and secret-management screens are not available yet.
+Development preview of project and environment management in dark and light mode, captured from the current UI with example metadata and a simulated unlocked vault. This work is not yet included in the published source. No credentials are shown. These captures show application content; native title bars vary by operating system.
 
-![Latch in dark mode, showing the empty vault-creation form](docs/assets/latch-dark.png)
+![Latch in dark mode, showing the Orbit API example project and its four environments](docs/assets/latch-dark.png)
 
 <details>
 <summary>Light appearance</summary>
 
-![Latch in light mode, showing the empty vault-creation form](docs/assets/latch-light.png)
+![Latch in light mode, showing the Orbit API example project and its four environments](docs/assets/latch-light.png)
 
 </details>
 
