@@ -71,7 +71,12 @@ impl DeviceKey {
 }
 
 /// A decrypted vault key. It has no debug, clone, or serialization implementation.
-pub struct VaultKey(Zeroizing<Vec<u8>>, [u8; 16], [u8; 16]);
+pub struct VaultKey(
+    Zeroizing<Vec<u8>>,
+    // Record storage currently consumes these authenticated IDs only on Linux.
+    #[cfg_attr(not(target_os = "linux"), expect(dead_code))] [u8; 16],
+    #[cfg_attr(not(target_os = "linux"), expect(dead_code))] [u8; 16],
+);
 
 #[cfg(target_os = "linux")]
 impl VaultKey {
