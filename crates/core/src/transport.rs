@@ -1,10 +1,9 @@
 //! Length-prefixed, secret-free local request transport.
 
 use crate::protocol::{MAX_FRAME_BYTES, RunRequest, RunResponse};
-use std::{
-    io::{Read, Write},
-    path::PathBuf,
-};
+use std::io::{Read, Write};
+#[cfg(target_os = "linux")]
+use std::path::PathBuf;
 
 /// Local transport failure without endpoint or payload details.
 #[derive(Debug)]

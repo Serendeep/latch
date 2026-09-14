@@ -1,10 +1,13 @@
 //! Reviewed process-launch records. Construction and execution stay in the Rust broker.
 
+#[cfg(target_os = "linux")]
+use crate::protocol::RunRequest;
 use crate::{
-    protocol::{AgentKind, Environment, RunRequest},
+    protocol::{AgentKind, Environment},
     secret::SecretSummary,
 };
 use serde::{Deserialize, Serialize};
+#[cfg(target_os = "linux")]
 use std::path::PathBuf;
 
 /// OS-observed local caller metadata. The agent label remains self-reported.
@@ -46,6 +49,7 @@ pub struct RunReview {
     pub baseline: Vec<String>,
 }
 
+#[cfg(target_os = "linux")]
 pub(crate) struct ReviewedSecret {
     pub id: [u8; 16],
     pub revision: i64,
@@ -63,6 +67,7 @@ pub struct MissingSecretInput {
     pub value: String,
 }
 
+#[cfg(target_os = "linux")]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ExecutableIdentity {
     pub device: u64,
@@ -74,17 +79,29 @@ pub(crate) struct ExecutableIdentity {
 
 /// One broker-created launch proposal. It has no serialization or Debug implementation.
 pub struct PreparedRun {
+    #[cfg(target_os = "linux")]
     pub(crate) request_id: [u8; 16],
+    #[cfg(target_os = "linux")]
     pub(crate) project_id: [u8; 16],
+    #[cfg(target_os = "linux")]
     pub(crate) environment_id: [u8; 16],
+    #[cfg(target_os = "linux")]
     pub(crate) project_revision: i64,
+    #[cfg(target_os = "linux")]
     pub(crate) directory: PathBuf,
+    #[cfg(target_os = "linux")]
     pub(crate) executable: PathBuf,
+    #[cfg(target_os = "linux")]
     pub(crate) executable_identity: ExecutableIdentity,
+    #[cfg(target_os = "linux")]
     pub(crate) args: Vec<String>,
+    #[cfg(target_os = "linux")]
     pub(crate) agent: AgentKind,
+    #[cfg(target_os = "linux")]
     pub(crate) peer: PeerIdentity,
+    #[cfg(target_os = "linux")]
     pub(crate) secrets: Vec<ReviewedSecret>,
+    #[cfg(target_os = "linux")]
     pub(crate) missing: Vec<String>,
     pub(crate) view: RunReview,
 }
@@ -105,6 +122,7 @@ pub struct LaunchReceipt {
 }
 
 /// Request fields consumed by the broker after external validation.
+#[cfg(target_os = "linux")]
 pub(crate) fn into_parts(
     request: RunRequest,
 ) -> (
