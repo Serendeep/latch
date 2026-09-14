@@ -25,6 +25,14 @@ Planned capabilities include:
 
 Latch is not a general password manager or a replacement for an enterprise secrets platform. A process receiving a secret can read and leak it. See [SECURITY.md](SECURITY.md) for the security boundary and current limitations.
 
+## Agent demo
+
+[![Watch Latch handle requests from Codex, Claude Code, and a T3 Code session](docs/assets/latch-agents-demo.gif)](https://github.com/Serendeep/latch/blob/main/docs/assets/latch-agents-demo.mp4)
+
+[Watch or download the MP4](https://github.com/Serendeep/latch/raw/refs/heads/main/docs/assets/latch-agents-demo.mp4).
+
+Recorded from the installed Linux desktop with a disposable vault and generated credentials. Codex and Claude Code issued their requests through their actual CLIs; the T3 Code request came through an agent terminal tool in a T3 Code session and appears as **Other agent**. Each request required popup approval, and all three child processes exited with code 0. The recording shows Latch's window, with chapter captions added during editing. Caller labels are self-reported.
+
 ## Preview
 
 Development preview of project, environment, and secret metadata management in dark and light mode, captured from the current UI with a simulated unlocked vault. Values remain concealed and the examples contain no credentials. These captures show application content; native title bars vary by operating system.
