@@ -1,0 +1,17 @@
+---
+title: "Latch documentation"
+---
+
+Latch keeps project secrets in a local encrypted vault. When a coding agent needs access, it asks Latch to launch a command with named secrets. You review the project, environment, and command in a small desktop popup.
+
+Start with [installation and vault setup](./getting-started.mdx), then [connect your coding agent](./agents.mdx).
+
+## Current status
+
+This is an early development build. Linux supports vault creation and command launching with a password-protected GNOME login keyring. macOS and Windows compile in CI, but their credential-store adapters and command transport are not ready. Use generated test credentials while evaluating Latch.
+
+Project management, secret editing, configuration import, individual reveal, timed clipboard clearing, and one-time launch approvals are implemented. Audit browsing, weekly compressed archives with configurable retention, and portable encrypted backups are planned. There are no signed releases or automatic updates.
+
+## What approval means
+
+Approval selects which process receives a value. **That process can read and leak it.** Latch does not sandbox commands or defend an unlocked session against malware running as your user. Read the [security model](./security.mdx).

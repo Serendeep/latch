@@ -30,6 +30,8 @@ jobs:
           cache-on-failure: true
       - run: pnpm install --frozen-lockfile
       - run: pnpm audit
+      - run: pnpm --dir site install --frozen-lockfile
+      - run: pnpm --dir site audit
       - run: cargo install cargo-audit --version 0.22.2 --locked
       - run: cargo audit
       - run: python3 tests/test_scanner_install.py

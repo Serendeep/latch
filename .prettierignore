@@ -7,3 +7,9 @@ apps/desktop/src-tauri/gen/
 apps/desktop/src/generated/
 test-results/
 playwright-report/
+
+site/.next/
+site/out/
+site/.source/
+site/next-env.d.ts
+site/tsconfig.tsbuildinfo

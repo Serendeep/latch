@@ -1,0 +1,31 @@
+name: Documentation
+on:
+  push:
+    branches: [main]
+    paths: ["site/**", ".github/workflows/docs.yml"]
+  pull_request:
+    paths: ["site/**", ".github/workflows/docs.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NEXT_TELEMETRY_DISABLED: "1"
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
+      - run: pnpm --dir site install --frozen-lockfile
+      - run: pnpm --dir site audit --audit-level high
+      - run: pnpm --dir site build
+      - run: pnpm --dir site types:check
+      - run: python3 scripts/check-doc-links.py

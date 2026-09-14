@@ -1,0 +1,27 @@
+---
+title: "Managing your vault"
+---
+
+## Projects and environments
+
+Add a project in the manager and select its directory. The directory binds CLI requests to that project. Each project starts with development, test, staging, and production environments. Select the environment before creating, importing, revealing, or copying secrets.
+
+## Import and expected names
+
+Import a `.env` file through the native picker and review the names before committing. Existing names are reported as conflicts. Import does not erase the original plaintext file.
+
+Compare a `.env.example` to find expected variable names. Latch discards the right-hand sides rather than importing example values as secrets. The parser does not execute shell expressions.
+
+## Reveal and copy
+
+Values are concealed by default. Reveal deliberately displays one selected value. Copy stays in Rust and clears the clipboard after the selected 15, 30, or 60 seconds if its contents still match the Latch copy. Clipboard managers may retain a copy despite those controls.
+
+## Locking and the tray
+
+The vault locks after five minutes. Closing the manager locks it and keeps the background app running. The tray provides Open Latch, Lock Vault, and Quit Latch. Closing a request popup denies that request.
+
+Locking cannot retract a value already delivered to a process. OS-session locking and suspend integration are not implemented yet.
+
+## Recovery
+
+Unlocking requires both your separate Latch passphrase and device material in the OS credential store. There is no passphrase reset or portable backup recovery yet. Losing either factor prevents normal unlock.
