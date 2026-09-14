@@ -2272,6 +2272,8 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "latch-core",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -2297,7 +2299,9 @@ name = "latch-desktop"
 version = "0.1.0"
 dependencies = [
  "arboard",
+ "getrandom 0.4.3",
  "latch-core",
+ "rustix",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",

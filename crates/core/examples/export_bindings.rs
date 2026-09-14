@@ -2,8 +2,9 @@
 use latch_core::{
     AppStatus, VaultAvailability,
     import::FileReview,
+    process::{LaunchReceipt, RunReview},
     project::{DirectorySelection, ProjectPage, ProjectSummary},
-    protocol::Environment,
+    protocol::{AgentKind, Environment},
     secret::SecretSummary,
 };
 use std::{fs, path::PathBuf};
@@ -18,11 +19,14 @@ fn main() {
             VaultAvailability::decl(&config),
             AppStatus::decl(&config),
             Environment::decl(&config),
+            AgentKind::decl(&config),
             ProjectSummary::decl(&config),
             ProjectPage::decl(&config),
             DirectorySelection::decl(&config),
             SecretSummary::decl(&config),
             FileReview::decl(&config),
+            RunReview::decl(&config),
+            LaunchReceipt::decl(&config),
         ]
         .iter()
         .map(|decl| format!("export {decl}\n"))

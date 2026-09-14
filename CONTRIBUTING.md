@@ -23,6 +23,7 @@ This starts a browser preview. Without the native Tauri bridge, the page reports
 | `tests`                  | CLI, browser, native IPC, and scanner checks     |
 | `scripts`                | Repository tooling                               |
 | `examples`               | Illustrative configuration without credentials   |
+| `integrations`           | Agent-neutral skill instructions                 |
 
 Generated frontend contracts live in `apps/desktop/src/generated`. Update their Rust definitions and run `mise exec -- pnpm bindings`; do not edit generated files directly.
 

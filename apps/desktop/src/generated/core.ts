@@ -14,6 +14,7 @@ lock_epoch: string,
  */
 vault: VaultAvailability, };
 export type Environment = "development" | "test" | "staging" | "production";
+export type AgentKind = "codex" | "claude-code" | "other";
 export type ProjectSummary = {
 /**
  * Opaque lowercase hexadecimal identity.
@@ -91,3 +92,57 @@ present: Array<string>,
  * Empty import values omitted from the candidate batch.
  */
 empty: Array<string>, };
+export type RunReview = {
+/**
+ * Opaque request identity.
+ */
+id: string,
+/**
+ * Self-reported agent kind.
+ */
+agent: AgentKind,
+/**
+ * OS-observed caller process identity.
+ */
+peer_pid: string,
+/**
+ * Reviewed project display name.
+ */
+project_name: string,
+/**
+ * Reviewed canonical working directory.
+ */
+directory: string,
+/**
+ * Explicit environment scope.
+ */
+environment: Environment,
+/**
+ * Canonical executable path.
+ */
+executable: string,
+/**
+ * Literal ordered arguments.
+ */
+args: Array<string>,
+/**
+ * True when the caller acknowledged interpreter semantics.
+ */
+shell: boolean,
+/**
+ * Exact authenticated secret metadata and revisions selected by the request.
+ */
+secrets: Array<SecretSummary>,
+/**
+ * Requested names that are not yet stored and must be entered before approval.
+ */
+missing: Array<string>,
+/**
+ * Fixed baseline variable names inherited by the child.
+ */
+baseline: Array<string>, };
+export type LaunchReceipt = {
+/**
+ * Opaque persisted job identity.
+ */
+job_id: string, };

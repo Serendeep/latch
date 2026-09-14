@@ -4,6 +4,9 @@ pub mod broker;
 pub mod import;
 #[cfg(target_os = "linux")]
 mod keystore;
+pub mod process;
+#[cfg(target_os = "linux")]
+mod process_store;
 pub mod project;
 #[cfg(target_os = "linux")]
 mod project_store;
@@ -13,6 +16,7 @@ pub mod secret;
 mod secret_store;
 #[cfg(target_os = "linux")]
 mod storage;
+pub mod transport;
 pub mod vault;
 
 use serde::{Deserialize, Serialize};

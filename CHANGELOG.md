@@ -6,6 +6,8 @@ Notable changes to Latch are recorded here. No public release has been published
 
 ### Added
 
+- Linux agent-neutral CLI transport, owner-verified local socket, one-time approval popup, scoped direct process launch, and process lifecycle audit events.
+- Missing-secret entry during approval, encrypted atomically with approval consumption, plus a portable skill for Codex, Claude Code, and other skill-aware agents.
 - Native-file `.env` import with names-only review, encrypted five-minute candidates, atomic creation/audit writes, and conflict/empty-value skipping.
 - `.env.example` missing/present name comparison without importing example values.
 
@@ -21,7 +23,7 @@ Notable changes to Latch are recorded here. No public release has been published
 - Tests for passphrase/tamper rejection, transaction rollback, interrupted setup, stale unlock cancellation, real GNOME Keyring, and native desktop flows.
 
 - Tauri desktop scaffold with native system-themed window decorations and light, dark, and system content appearance.
-- A shared Rust request contract and CLI that validates requests and refuses execution until the broker is implemented.
+- A shared Rust request contract and CLI with fixed machine-readable outcomes.
 - Strict TypeScript 7, Oxlint, and toolchains managed through mise and pnpm.
 - Unit, integration, accessibility, dependency-audit, and secret-scanning checks.
 - Contributor documentation, a security policy, and an MIT license.
@@ -30,5 +32,5 @@ Notable changes to Latch are recorded here. No public release has been published
 ### Not yet available
 
 - macOS and Windows vault operations pending credential-store qualification.
-- Agent approval and process injection.
-- Agent integrations, audit archives, and portable backups.
+- macOS and Windows agent transport and process launch.
+- Audit archives and portable backups.

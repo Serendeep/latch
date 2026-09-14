@@ -179,7 +179,7 @@ impl Database {
     }
 }
 
-fn write_secret(
+pub(crate) fn write_secret(
     tx: &rusqlite::Transaction<'_>,
     row: &SecretRow,
     previous: Option<i64>,

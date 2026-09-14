@@ -1,10 +1,12 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main",
-  "description": "The local main window may manage its vault, scoped project metadata, and individual secrets.",
+  "description": "The local main window may manage its vault, scoped records, and one pending process request.",
   "windows": ["main"],
   "permissions": [
     "allow-app-status",
+    "allow-agent-request-view",
+    "allow-agent-request-decide",
     "allow-vault-create",
     "allow-vault-unlock",
     "allow-vault-lock",

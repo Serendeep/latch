@@ -19,5 +19,9 @@ tauri = { version = "=2.11.5", features = [] }
 tauri-plugin-dialog = "=2.7.3"
 zeroize.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+getrandom = "=0.4.3"
+rustix = { version = "=1.1.4", features = ["process", "net"] }
+
 [lints]
 workspace = true

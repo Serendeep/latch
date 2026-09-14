@@ -10,18 +10,16 @@ Latch is being built around a simple workflow: an agent requests named credentia
 
 ## Status
 
-**Early development. Linux vault, project management, scoped secret CRUD, reveal, clipboard copy, and configuration import are implemented; command delivery is not available yet.**
+**Early development. Linux now has a first end-to-end agent request and one-time command launch path alongside vault, project, secret, clipboard, and import flows. Use generated test credentials only.**
 
 On Linux, you can create an empty encrypted vault, unlock it with a separate Latch passphrase, and lock it again. The first credential-store adapter requires GNOME Keyring’s unlocked, password-protected login collection. macOS and Windows vault operations remain unavailable pending native credential-store qualification.
 
-Vault keys stay in Rust. SQLite stores the authenticated wrapped key and separately encrypted secret metadata and values; the GNOME login keyring stores separate random device material. Unlocking requires both that material and the passphrase. The vault locks after five minutes, and explicit locking cancels outstanding operations. Audit records cover vault creation, unlock outcomes, locking, project/environment changes, secret changes, individual reveals, copy access, imports, and example comparisons. Weekly archives are not implemented yet.
+Vault keys stay in Rust. SQLite stores the authenticated wrapped key and separately encrypted secret metadata and values; the GNOME login keyring stores separate random device material. Unlocking requires both that material and the passphrase. The vault locks after five minutes, and explicit locking cancels outstanding operations. Audit records cover vault creation, unlock outcomes, locking, project/environment changes, secret changes, individual reveals, copy access, imports, comparisons, agent requests, decisions, per-secret dispatch, and process exit. Weekly archives are not implemented yet.
 
-The desktop follows system, light, or dark appearance. The CLI still validates requests and refuses to launch them. Claude Code and Codex integrations have not yet been tested.
+The desktop follows system, light, or dark appearance. The Linux CLI communicates over an owner-only Unix socket. Codex, Claude Code, and other agents use the same CLI contract; the caller label is self-reported and does not grant authority. macOS and Windows command transport remain unavailable.
 
 Planned capabilities include:
 
-- Deliberate approval before a command receives selected secrets.
-- An agent-neutral CLI for local coding tools.
 - Metadata-only audit history with weekly compressed archives, retaining three archives by default. Both settings will be configurable.
 - Password-encrypted portable backups.
 
@@ -29,7 +27,7 @@ Latch is not a general password manager or a replacement for an enterprise secre
 
 ## Preview
 
-Development preview of project, environment, and secret metadata management in dark and light mode, captured from the current UI with a simulated unlocked vault. Values remain concealed and the examples contain no credentials. Agent approval is not implemented yet. These captures show application content; native title bars vary by operating system.
+Development preview of project, environment, and secret metadata management in dark and light mode, captured from the current UI with a simulated unlocked vault. Values remain concealed and the examples contain no credentials. These captures show application content; native title bars vary by operating system.
 
 ![Latch in dark mode, showing a project, its environments, and concealed secret records](docs/assets/latch-dark.png)
 
@@ -97,13 +95,21 @@ Latch preserves an incomplete setup instead of overwriting it. Quit Latch and pr
 
 If a previously created vault fails to unlock, preserve its directory and OS keyring item. Renaming files, changing the keyring password to empty, or deleting device material will not recover its passphrase.
 
-## CLI preview
+## Agent requests and command launch
+
+![One-time Claude Code request review with exact scope and concealed missing value entry](docs/assets/latch-request-dark.png)
 
 ```sh
 mise exec -- cargo run -p latch-cli -- run --project . --env development --secret SERVICE_TOKEN --json -- node --version
 ```
 
-This currently returns `broker_unavailable` with exit code 7 and executes nothing. Malformed requests return `invalid_input` with exit code 2. Do not pass secret values as arguments.
+Keep the Linux desktop open and the vault unlocked. Latch resolves the project directory and executable before showing a modal review with the claimed agent, OS-observed process ID, exact executable and arguments, environment, and requested names. Missing names can be entered in the popup; approval encrypts them into that project environment and launches the command once. Existing vault values never enter the webview.
+
+The broker invokes the reviewed executable directly, clears its inherited environment, and adds a small baseline (`HOME`, `TMPDIR`, `LANG`, `PATH`, and locale variables when present) plus only the named secrets. It does not capture child input or output. Add `--shell` when the executable is intentionally a shell or interpreter; Latch still passes its argument vector directly. A child process receiving an environment variable can read and leak it.
+
+Use `--agent codex`, `--agent claude-code`, or the default `other`. This is a self-reported audit label; peer UID and PID come from the Unix socket. The request expires after five minutes, only one approval may be pending, and eight launched processes may be tracked at once. `--wait`, requests without named secrets, macOS/Windows transport, process cancellation, and audit browsing are not implemented. Fixed exit codes distinguish denial, locked vault, stale review, queue limits, launch failure, and unavailable broker. Malformed requests return `invalid_input` with exit code 2. Never pass secret values as arguments.
+
+[`integrations/latch/SKILL.md`](integrations/latch/SKILL.md) is a small model-invoked integration for agents that support skills. Other coding agents can call the same CLI directly; the protocol does not depend on a particular agent vendor.
 
 ## Contributing
 

@@ -26,7 +26,7 @@ pub enum SecretError {
 }
 
 /// Secret metadata returned for one selected project environment. Never contains a value.
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[cfg_attr(feature = "bindings", derive(ts_rs::TS))]
 pub struct SecretSummary {
     /// Opaque lowercase hexadecimal identity.
@@ -720,6 +720,8 @@ mod persistence_tests {
         assert!(count(&db) == 2);
         {
             let tx = db.connection.transaction().unwrap();
+            tx.execute_batch(include_str!("../migrations/0006_process_launch.down.sql"))
+                .unwrap();
             assert!(
                 tx.execute_batch(include_str!("../migrations/0005_import_audit.down.sql"))
                     .is_err()

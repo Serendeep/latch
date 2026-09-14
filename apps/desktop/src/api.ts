@@ -25,6 +25,8 @@ import type {
   Environment,
   SecretSummary,
   FileReview,
+  LaunchReceipt,
+  RunReview,
 } from "./generated/core";
 
 export type RevealedSecret = { id: string; revision: string; value: string };
@@ -206,5 +208,23 @@ export function commitImport(
     environment,
     token,
     confirmed,
+  });
+}
+
+export function getAgentRequest(): Promise<RunReview | null> {
+  return invoke("agent_request_view");
+}
+
+export function decideAgentRequest(
+  id: string,
+  lockEpoch: string,
+  approved: boolean,
+  missing: { name: string; value: string }[] = [],
+): Promise<LaunchReceipt | null> {
+  return invoke("agent_request_decide", {
+    id,
+    lockEpoch,
+    approved,
+    missing,
   });
 }

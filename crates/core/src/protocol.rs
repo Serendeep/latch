@@ -8,6 +8,32 @@ pub const VERSION: u16 = 1;
 /// Maximum encoded request size, checked before JSON decoding.
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
 
+/// A caller-supplied label for audit context. It never affects authorization.
+#[derive(Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS))]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentKind {
+    /// OpenAI Codex CLI or app.
+    Codex,
+    /// Anthropic Claude Code.
+    ClaudeCode,
+    /// Any other local caller.
+    Other,
+}
+
+impl FromStr for AgentKind {
+    type Err = InvalidRequest;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "codex" => Ok(Self::Codex),
+            "claude-code" => Ok(Self::ClaudeCode),
+            "other" => Ok(Self::Other),
+            _ => Err(InvalidRequest),
+        }
+    }
+}
+
 /// One project's explicit credential scope. There is no default/fallback scope.
 #[derive(Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[cfg_attr(feature = "bindings", derive(ts_rs::TS))]
@@ -64,6 +90,8 @@ pub(crate) fn valid_variable_name(name: &str) -> bool {
 pub struct RunRequest {
     /// Wire protocol version.
     pub protocol_version: u16,
+    /// Self-reported caller kind, recorded separately from OS peer credentials.
+    pub agent: AgentKind,
     /// Proposed project locator, confirmed by a future broker before use.
     pub project: String,
     /// Explicit project environment.
@@ -76,6 +104,42 @@ pub struct RunRequest {
     pub args: Vec<String>,
     /// Explicit acknowledgment of interpreter semantics; does not select a shell.
     pub shell: bool,
+}
+
+/// Closed response from the local broker. It can never contain a credential value.
+#[derive(Deserialize, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RunResponse {
+    /// The reviewed command was launched once and is owned by the desktop.
+    Launched {
+        /// Opaque job identity for audit correlation.
+        job_id: String,
+    },
+    /// The developer denied this request.
+    Denied,
+    /// A fixed public failure code.
+    Error {
+        /// Stable code; no source error or request content.
+        code: RunErrorCode,
+    },
+}
+
+/// Stable CLI error codes.
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunErrorCode {
+    /// The app is absent or the local transport is unavailable.
+    BrokerUnavailable,
+    /// The vault must be unlocked before submitting a request.
+    VaultLocked,
+    /// Another request is already awaiting a decision.
+    QueueFull,
+    /// The reviewed request became stale.
+    StaleReview,
+    /// The executable could not be launched.
+    LaunchFailed,
+    /// Storage, audit, or integrity validation failed.
+    InternalFailure,
 }
 
 impl RunRequest {
@@ -129,6 +193,7 @@ mod tests {
     fn request() -> RunRequest {
         RunRequest {
             protocol_version: VERSION,
+            agent: AgentKind::Other,
             project: ".".into(),
             environment: Environment::Development,
             names: vec!["SERVICE_TOKEN".into()],

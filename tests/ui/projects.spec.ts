@@ -15,11 +15,43 @@ test("project creation, explicit scope deletion, accessible confirmation, and lo
     };
     let projects: Project[] = [];
     let vault = "unlocked";
+    let agentRequest: Record<string, unknown> | null = null;
+    Object.assign(window, {
+      showAgentRequest: () => {
+        agentRequest = {
+          id: "6".repeat(32),
+          agent: "claude-code",
+          peer_pid: "4312",
+          project_name: "Renamed workspace",
+          directory: "/tmp/latch-example-project",
+          environment: "development",
+          executable: "/usr/bin/node",
+          args: ["scripts/check-connection.mjs"],
+          shell: false,
+          secrets: [
+            {
+              id: "3".repeat(32),
+              name: "DATABASE_URL",
+              description: "Local database connection",
+              tags: ["database", "local"],
+              revision: "2",
+            },
+          ],
+          missing: ["SERVICE_TOKEN"],
+          baseline: ["HOME", "PATH", "LANG"],
+        };
+      },
+    });
     Object.defineProperty(window, "__TAURI_INTERNALS__", {
       value: {
         invoke: async (command: string, args: Record<string, unknown> = {}) => {
           if (command === "app_status")
             return { protocol_version: 1, lock_epoch: "1", vault };
+          if (command === "agent_request_view") return agentRequest;
+          if (command === "agent_request_decide") {
+            agentRequest = null;
+            return null;
+          }
           if (command === "vault_lock") {
             vault = "locked";
             return { protocol_version: 1, lock_epoch: "2", vault };
@@ -116,6 +148,31 @@ test("project creation, explicit scope deletion, accessible confirmation, and lo
       fullPage: true,
     });
   }
+  await page.evaluate(() =>
+    (window as unknown as { showAgentRequest: () => void }).showAgentRequest(),
+  );
+  const agentDialog = page.getByRole("dialog", {
+    name: "Approve this command?",
+  });
+  await expect(agentDialog).toBeVisible();
+  await expect(agentDialog.getByRole("button", { name: "Deny" })).toBeFocused();
+  await expect(agentDialog.getByLabel("SERVICE_TOKEN")).toHaveAttribute(
+    "type",
+    "password",
+  );
+  expect(
+    (
+      await new AxeBuilder({ page })
+        .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
+        .analyze()
+    ).violations,
+  ).toEqual([]);
+  await page.screenshot({
+    path: "docs/assets/latch-request-dark.png",
+    fullPage: false,
+  });
+  await page.keyboard.press("Escape");
+  await expect(agentDialog).not.toBeVisible();
   await page.getByRole("button", { name: "Import .env", exact: true }).click();
   const review = page.getByRole("dialog", { name: "Review import" });
   await expect(review).toBeVisible();

@@ -4,8 +4,9 @@ use latch_core::{
     AppStatus,
     broker::{Broker, BrokerError, ProjectCommand, SecretCommand, SecretResult},
     import::FileReview,
+    process::{LaunchReceipt, MissingSecretInput, PreparedRun, RunReview},
     project::{DirectorySelection, ProjectPage},
-    protocol::Environment,
+    protocol::{Environment, RunErrorCode, RunResponse},
     secret::{RevealedSecret, SecretSummary},
 };
 use std::{
@@ -18,6 +19,176 @@ use zeroize::Zeroizing;
 
 struct ClipboardState {
     inner: Mutex<ClipboardInner>,
+}
+
+struct PendingRequest {
+    run: PreparedRun,
+    epoch: String,
+    created: std::time::Instant,
+    reply: std::sync::mpsc::SyncSender<RunResponse>,
+}
+
+struct RequestState {
+    intake: Mutex<()>,
+    pending: Mutex<Option<PendingRequest>>,
+}
+
+#[cfg(target_os = "linux")]
+struct SocketGuard(std::path::PathBuf);
+
+#[cfg(target_os = "linux")]
+impl Drop for SocketGuard {
+    fn drop(&mut self) {
+        let Ok(metadata) = self.0.symlink_metadata() else {
+            return;
+        };
+        use std::os::unix::fs::{FileTypeExt, MetadataExt};
+        if metadata.file_type().is_socket() && metadata.uid() == rustix::process::geteuid().as_raw()
+        {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+}
+
+fn run_error(error: BrokerError) -> RunErrorCode {
+    match error {
+        BrokerError::InvalidState | BrokerError::KeyStoreUnavailable | BrokerError::Unsupported => {
+            RunErrorCode::VaultLocked
+        }
+        BrokerError::Busy | BrokerError::JobLimit => RunErrorCode::QueueFull,
+        BrokerError::RevisionConflict | BrokerError::InvalidRun | BrokerError::InvalidSecret => {
+            RunErrorCode::StaleReview
+        }
+        BrokerError::LaunchFailed => RunErrorCode::LaunchFailed,
+        _ => RunErrorCode::InternalFailure,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn start_agent_listener(
+    window: tauri::WebviewWindow,
+    broker: Arc<Broker>,
+    requests: Arc<RequestState>,
+) -> Result<SocketGuard, BrokerError> {
+    use std::os::unix::{
+        fs::{FileTypeExt, MetadataExt, PermissionsExt},
+        net::UnixListener,
+    };
+    let path = latch_core::transport::socket_path().map_err(|_| BrokerError::StorageUnavailable)?;
+    if let Ok(metadata) = path.symlink_metadata() {
+        if !metadata.file_type().is_socket()
+            || metadata.uid() != rustix::process::geteuid().as_raw()
+            || metadata.mode() & 0o077 != 0
+            || std::os::unix::net::UnixStream::connect(&path).is_ok()
+        {
+            return Err(BrokerError::AlreadyRunning);
+        }
+        std::fs::remove_file(&path).map_err(|_| BrokerError::StorageUnavailable)?;
+    }
+    let listener = UnixListener::bind(&path).map_err(|_| BrokerError::StorageUnavailable)?;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+        .map_err(|_| BrokerError::StorageUnavailable)?;
+    std::thread::Builder::new()
+        .name("latch-agent-ipc".into())
+        .spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let window = window.clone();
+                let broker = Arc::clone(&broker);
+                let requests = Arc::clone(&requests);
+                std::thread::spawn(move || handle_agent(stream, window, broker, requests));
+            }
+        })
+        .map_err(|_| BrokerError::StorageUnavailable)?;
+    Ok(SocketGuard(path))
+}
+
+#[cfg(target_os = "linux")]
+fn handle_agent(
+    mut stream: std::os::unix::net::UnixStream,
+    window: tauri::WebviewWindow,
+    broker: Arc<Broker>,
+    requests: Arc<RequestState>,
+) {
+    use std::time::Duration;
+    let response = (|| {
+        let credentials = rustix::net::sockopt::socket_peercred(&stream)
+            .map_err(|_| RunErrorCode::BrokerUnavailable)?;
+        if credentials.uid != rustix::process::geteuid() {
+            return Err(RunErrorCode::BrokerUnavailable);
+        }
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .map_err(|_| RunErrorCode::BrokerUnavailable)?;
+        let request = latch_core::transport::read_message(&mut stream)
+            .map_err(|_| RunErrorCode::StaleReview)?;
+        let _intake = requests
+            .intake
+            .lock()
+            .map_err(|_| RunErrorCode::InternalFailure)?;
+        if requests
+            .pending
+            .lock()
+            .map_err(|_| RunErrorCode::InternalFailure)?
+            .is_some()
+        {
+            return Err(RunErrorCode::QueueFull);
+        }
+        let status = broker.status().map_err(run_error)?;
+        if !matches!(status.vault, latch_core::VaultAvailability::Unlocked) {
+            return Err(RunErrorCode::VaultLocked);
+        }
+        let mut request_id = [0; 16];
+        getrandom::fill(&mut request_id).map_err(|_| RunErrorCode::InternalFailure)?;
+        let pid = credentials.pid.as_raw_nonzero().get() as u32;
+        let run = broker
+            .prepare_run(
+                request,
+                request_id,
+                latch_core::process::PeerIdentity {
+                    uid: credentials.uid.as_raw(),
+                    pid,
+                },
+                status.lock_epoch.clone(),
+            )
+            .map_err(run_error)?;
+        let id = run.view().id.clone();
+        let (reply, receive) = std::sync::mpsc::sync_channel(1);
+        {
+            let mut pending = requests
+                .pending
+                .lock()
+                .map_err(|_| RunErrorCode::InternalFailure)?;
+            if pending.is_some() {
+                return Err(RunErrorCode::QueueFull);
+            }
+            *pending = Some(PendingRequest {
+                run,
+                epoch: status.lock_epoch,
+                created: std::time::Instant::now(),
+                reply,
+            });
+        }
+        drop(_intake);
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+        match receive.recv_timeout(Duration::from_secs(300)) {
+            Ok(response) => Ok(response),
+            Err(_) => {
+                let expired = requests.pending.lock().ok().and_then(|mut pending| {
+                    (pending.as_ref()?.run.view().id == id)
+                        .then(|| pending.take())
+                        .flatten()
+                });
+                if let Some(expired) = expired {
+                    let _ = broker.expire_run(expired.run, expired.epoch);
+                }
+                Err(RunErrorCode::StaleReview)
+            }
+        }
+    })()
+    .unwrap_or_else(|code| RunResponse::Error { code });
+    let _ = latch_core::transport::write_response(&mut stream, &response);
 }
 
 struct ClipboardInner {
@@ -162,6 +333,92 @@ fn authorize(window: &tauri::WebviewWindow) -> Result<(), BrokerError> {
 }
 
 #[tauri::command]
+fn agent_request_view(
+    window: tauri::WebviewWindow,
+    broker: tauri::State<'_, Arc<Broker>>,
+    requests: tauri::State<'_, Arc<RequestState>>,
+) -> Result<Option<RunReview>, BrokerError> {
+    authorize(&window)?;
+    let mut pending = requests
+        .pending
+        .lock()
+        .map_err(|_| BrokerError::StorageUnavailable)?;
+    if pending
+        .as_ref()
+        .is_some_and(|request| request.created.elapsed() >= Duration::from_secs(300))
+    {
+        let expired = pending.take().ok_or(BrokerError::InvalidState)?;
+        drop(pending);
+        let _ = expired.reply.send(RunResponse::Error {
+            code: RunErrorCode::StaleReview,
+        });
+        broker.expire_run(expired.run, expired.epoch)?;
+        return Ok(None);
+    }
+    Ok(pending.as_ref().map(|request| request.run.view().clone()))
+}
+
+#[tauri::command]
+async fn agent_request_decide(
+    window: tauri::WebviewWindow,
+    broker: tauri::State<'_, Arc<Broker>>,
+    requests: tauri::State<'_, Arc<RequestState>>,
+    id: String,
+    lock_epoch: String,
+    approved: bool,
+    missing: Vec<MissingSecretInput>,
+) -> Result<Option<LaunchReceipt>, BrokerError> {
+    authorize(&window)?;
+    let pending = {
+        let mut slot = requests
+            .pending
+            .lock()
+            .map_err(|_| BrokerError::StorageUnavailable)?;
+        if slot
+            .as_ref()
+            .is_none_or(|request| request.run.view().id != id)
+        {
+            return Err(BrokerError::InvalidRun);
+        }
+        slot.take().ok_or(BrokerError::InvalidRun)?
+    };
+    if pending.epoch != lock_epoch || pending.created.elapsed() >= Duration::from_secs(300) {
+        let _ = pending.reply.send(RunResponse::Error {
+            code: RunErrorCode::StaleReview,
+        });
+        let broker = Arc::clone(&broker);
+        tauri::async_runtime::spawn_blocking(move || broker.expire_run(pending.run, pending.epoch))
+            .await
+            .map_err(|_| BrokerError::StorageUnavailable)??;
+        return Err(BrokerError::RevisionConflict);
+    }
+    let PendingRequest {
+        run, epoch, reply, ..
+    } = pending;
+    let broker = Arc::clone(&broker);
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        if approved {
+            broker.launch_run(run, missing, epoch).map(Some)
+        } else {
+            broker.deny_run(run, epoch).map(|_| None)
+        }
+    })
+    .await
+    .map_err(|_| BrokerError::StorageUnavailable)?;
+    let response = match &result {
+        Ok(Some(receipt)) => RunResponse::Launched {
+            job_id: receipt.job_id.clone(),
+        },
+        Ok(None) => RunResponse::Denied,
+        Err(error) => RunResponse::Error {
+            code: run_error(*error),
+        },
+    };
+    let _ = reply.send(response);
+    result
+}
+
+#[tauri::command]
 fn app_status(
     window: tauri::WebviewWindow,
     broker: tauri::State<'_, Arc<Broker>>,
@@ -214,10 +471,27 @@ fn vault_lock(
     window: tauri::WebviewWindow,
     broker: tauri::State<'_, Arc<Broker>>,
     clipboard: tauri::State<'_, Arc<ClipboardState>>,
+    requests: tauri::State<'_, Arc<RequestState>>,
 ) -> Result<AppStatus, BrokerError> {
     authorize(&window)?;
+    let pending = requests
+        .pending
+        .lock()
+        .ok()
+        .and_then(|mut slot| slot.take());
+    let cancelled = pending.map(|pending| {
+        let PendingRequest {
+            run, epoch, reply, ..
+        } = pending;
+        let result = broker.cancel_run(run, epoch);
+        let _ = reply.send(RunResponse::Error {
+            code: RunErrorCode::StaleReview,
+        });
+        result
+    });
     let status = broker.lock();
     clear_clipboard_now(window.app_handle().clone(), Arc::clone(&clipboard));
+    cancelled.transpose()?;
     status
 }
 
@@ -724,7 +998,22 @@ fn main() {
                 .path()
                 .app_local_data_dir()
                 .map_err(|_| std::io::Error::other("Application data is unavailable."))?;
-            app.manage(Arc::new(Broker::start(directory.join("vault"))));
+            let broker = Arc::new(Broker::start(directory.join("vault")));
+            let requests = Arc::new(RequestState {
+                intake: Mutex::new(()),
+                pending: Mutex::new(None),
+            });
+            app.manage(Arc::clone(&broker));
+            app.manage(Arc::clone(&requests));
+            #[cfg(target_os = "linux")]
+            {
+                let window = app
+                    .get_webview_window("main")
+                    .ok_or_else(|| std::io::Error::other("Main window is unavailable."))?;
+                let socket = start_agent_listener(window, broker, requests)
+                    .map_err(|_| std::io::Error::other("Agent transport is unavailable."))?;
+                app.manage(socket);
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -733,6 +1022,18 @@ fn main() {
                 tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed
             ) && let Some(broker) = window.try_state::<Arc<Broker>>()
             {
+                if let Some(requests) = window.try_state::<Arc<RequestState>>()
+                    && let Ok(mut pending) = requests.pending.lock()
+                    && let Some(pending) = pending.take()
+                {
+                    let PendingRequest {
+                        run, epoch, reply, ..
+                    } = pending;
+                    let _ = broker.cancel_run(run, epoch);
+                    let _ = reply.send(RunResponse::Error {
+                        code: RunErrorCode::StaleReview,
+                    });
+                }
                 let _ = broker.lock();
                 if let Some(clipboard) = window.try_state::<Arc<ClipboardState>>() {
                     clear_clipboard_now(window.app_handle().clone(), Arc::clone(&clipboard));
@@ -741,6 +1042,8 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             app_status,
+            agent_request_view,
+            agent_request_decide,
             vault_create,
             vault_unlock,
             vault_lock,

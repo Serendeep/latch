@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-There is no supported production release yet. The development build supports vault creation, passphrase unlocking, project metadata, secret management, individual reveal, clipboard copy, configuration import, and example-name comparison on Linux; native folder-picker and clipboard behavior remain unqualified. Agent delivery and recovery are not implemented. Do not entrust it with credentials.
+There is no supported production release yet. The development build supports vault creation, passphrase unlocking, project metadata, secret management, individual reveal, clipboard copy, configuration import, example-name comparison, and one-time approved command launch on Linux. Native folder-picker, clipboard, and launch behavior remain unqualified. Recovery is not implemented. Do not entrust it with credentials.
 
 ## Reporting a vulnerability
 
@@ -20,7 +20,7 @@ If an attacker obtains both a wrapped key and device material, offline passphras
 
 Approval controls which values Latch delivers to a selected process. It cannot prevent that process from reading or leaking them. It does not contain malicious software running as the same user, compromised operating systems, administrators, or approved code. Locking cannot retract a value already delivered.
 
-Agent-supplied names are claims, not authenticated identities. Planned audit records will distinguish those claims from OS-observed peer information. Audit archives will contain allowlisted metadata only and will not be tamper-proof records or password-encrypted vault backups.
+Agent labels are self-reported claims, not authenticated identities. Process-request audit records store that label separately from the peer UID and PID observed on the local socket. Audit archives will contain allowlisted metadata only and will not be tamper-proof records or password-encrypted vault backups.
 
 The desktop exposes narrowly scoped vault, project, and one-record secret commands to the local main window only. The folder picker uses the Rust dialog API. Its native acceptance flow remains unqualified in headless testing. The webview receives no general dialog, clipboard, filesystem, SQL, or shell permission. Passphrases and deliberately revealed values necessarily exist briefly in the webview and IPC; vault keys do not. Copy stays in Rust and returns only its expiry. Lock epochs reject requests submitted before a subsequent lock, including requests delayed in the desktop task queue. One worker serializes SQLite, credential-store access, and memory-hard derivation. Manual locks cancel queued work and drop the live key; a metadata mutation already inside its short SQLite commit section finishes first. Lock metadata is flushed when the worker can write. A crash or disk failure can lose a final lock event. Audit failure blocks normal mutations and further unlocking. The five-minute timer is implemented; OS-session lock and suspend integration are still pending and are not claimed by this build. There is no enabled command-launch implementation. The CLI rejects launch requests without executing them.
 
@@ -30,7 +30,15 @@ Project names, canonical directory paths, and environment kinds/identities share
 
 Directory-selection tokens are single-use, expire after five minutes, and are invalidated on lock or successful unlock. An unlock advances the session epoch so earlier requests cannot apply to the new session. Listing responses contain at most 20 projects and no secret values. Mutations check uniqueness in Rust across at most 100 decrypted metadata records, releasing the session lock between records. A returned page or native picker may already have shown metadata before a lock; locking cannot erase what a person or compromised renderer has observed. The GUI discards its project state on lock and ignores late results.
 
-Canonical directory checks reject traversal and lossy path decoding. They do not prevent later filesystem replacement. Command dispatch must revalidate the reviewed directory when that feature is implemented. Weekly audit rotation, portable recovery, and agent attribution are still pending.
+Canonical directory checks reject traversal and lossy path decoding. The Linux broker revalidates the encrypted project binding, environment identity, project and secret revisions, executable identity, and canonical directory before launch. This narrows review-to-use replacement but cannot prevent changes to executable content that preserve the checked filesystem metadata, runtime library or interpreter changes, or changes after process creation. Weekly audit rotation, portable recovery, and authenticated agent identity are still pending.
+
+## Agent request and process boundary
+
+The Linux CLI and desktop exchange bounded, versioned, names-only JSON frames through `$XDG_RUNTIME_DIR/latch-development.sock`. The runtime directory and socket must be owned by the current user with no group or world permissions, and the desktop accepts only peers whose kernel-reported effective UID matches its own. Same-user malware can still submit requests, impersonate an agent label, manipulate the user interface, observe process state, or steal values from an approved process.
+
+Only one request can await approval. The popup shows no existing values and defaults keyboard focus to **Deny**. A missing requested value crosses the webview IPC once, is validated and encrypted in Rust, and is committed with the consumed approval before launch. The command receives the small documented baseline environment and the exact selected names. Latch invokes the canonical executable directly with literal arguments, an explicit working directory, null standard streams, and no implicit shell. `--shell` records and displays that interpreter semantics are intentional; it does not parse or join arguments.
+
+Approval is consumed before the operating system spawn call so a failed or ambiguous launch cannot be retried with the same decision. A spawn failure leaves an auditable failed job. Latch observes exit status but does not capture command output, arguments, executable paths, secret values, or environment contents in its database. Request, decision, per-secret dispatch, and exit events contain opaque IDs and allowlisted scope/caller metadata. Running jobs become unknown after broker restart; this build cannot stop a child or retract a value already delivered.
 
 ## Dependencies and releases
 
