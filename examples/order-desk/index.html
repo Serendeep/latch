@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Order desk</title>
+  <style>
+    :root {
+      font-family: system-ui, sans-serif;
+      color: #22251f;
+      background: #f4f5ef;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+    }
+    header {
+      padding: 24px 6%;
+      border-bottom: 1px solid #d4d9ca;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .brand {
+      font-weight: 750;
+      letter-spacing: -0.04em;
+      font-size: 22px;
+    }
+    header small {
+      color: #526047;
+    }
+    main {
+      max-width: 1000px;
+      margin: 64px auto;
+      padding: 0 24px;
+    }
+    h1 {
+      font-size: 42px;
+      letter-spacing: -0.05em;
+      margin: 8px 0;
+    }
+    p {
+      color: #526047;
+      line-height: 1.6;
+    }
+    .summary {
+      display: flex;
+      gap: 48px;
+      padding: 28px 0;
+      margin: 24px 0;
+      border-block: 1px solid #d4d9ca;
+    }
+    .summary strong {
+      display: block;
+      font-size: 32px;
+      letter-spacing: -0.04em;
+      margin-top: 8px;
+    }
+    .summary span {
+      font-size: 13px;
+      color: #526047;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+    }
+    th {
+      font-size: 12px;
+      color: #526047;
+      font-weight: 500;
+    }
+    td,
+    th {
+      padding: 18px 10px;
+      border-bottom: 1px solid #d4d9ca;
+    }
+    td:nth-child(3) {
+      font-variant-numeric: tabular-nums;
+    }
+    .status {
+      border: 1px solid #c3ccb5;
+      padding: 5px 10px;
+      border-radius: 20px;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    button {
+      background: #34482a;
+      color: white;
+      padding: 12px 18px;
+      border: 0;
+      border-radius: 7px;
+      font: inherit;
+      cursor: pointer;
+    }
+    button:focus-visible {
+      outline: 3px solid #697c48;
+      outline-offset: 3px;
+    }
+    .empty {
+      padding: 48px 0;
+    }
+    .eyebrow {
+      font-size: 12px;
+      letter-spacing: 0.12em;
+      color: #526047;
+    }
+    #orders {
+      overflow-x: auto;
+    }
+    @media (max-width: 600px) {
+      main {
+        margin-top: 32px;
+      }
+      h1 {
+        font-size: 34px;
+      }
+      .summary {
+        gap: 24px;
+      }
+      td,
+      th {
+        padding: 12px 8px;
+      }
+    }
+  </style>
+  <header>
+    <span class="brand">order desk.</span><small>Local demo store</small>
+  </header>
+  <main>
+    <span class="eyebrow">YOUR STORE, TODAY</span>
+    <h1>A little less busywork.</h1>
+    <p>Orders in one place. More time for everything else.</p>
+    <section id="content" aria-live="polite"></section>
+  </main>
+  <script>
+    const content = document.querySelector("#content");
+    async function load() {
+      content.textContent = "Loading orders…";
+      try {
+        const response = await fetch("/api/orders");
+        if (!response.ok)
+          throw new Error("Connect the order service to load your dashboard.");
+        const orders = await response.json();
+        const summary = document.createElement("div");
+        summary.className = "summary";
+        const money = new Intl.NumberFormat("en-US", {
+          style: "currency",
+          currency: "USD",
+        });
+        for (const [label, value] of [
+          ["Orders", orders.length],
+          [
+            "Sales",
+            money.format(orders.reduce((sum, order) => sum + order.total, 0)),
+          ],
+        ]) {
+          const block = document.createElement("div"),
+            name = document.createElement("span"),
+            number = document.createElement("strong");
+          name.textContent = label;
+          number.textContent = value;
+          block.append(name, number);
+          summary.append(block);
+        }
+        const container = document.createElement("div");
+        container.id = "orders";
+        const table = document.createElement("table");
+        table.innerHTML =
+          '<thead><tr><th scope="col">Order</th><th scope="col">Customer</th><th scope="col">Total</th><th scope="col">Status</th></tr></thead>';
+        const body = document.createElement("tbody");
+        for (const order of orders) {
+          const row = document.createElement("tr");
+          for (const value of [
+            `#${order.id} · ${order.item}`,
+            order.customer,
+            money.format(order.total),
+            order.status,
+          ]) {
+            const cell = document.createElement("td");
+            cell.textContent = value;
+            row.append(cell);
+          }
+          body.append(row);
+        }
+        table.append(body);
+        container.append(table);
+        content.replaceChildren(summary, container);
+      } catch {
+        const box = document.createElement("div");
+        box.className = "empty";
+        const heading = document.createElement("h2");
+        heading.textContent = "Your orders are one connection away.";
+        const message = document.createElement("p");
+        message.textContent =
+          "Connect the order service, then refresh to see your store.";
+        const retry = document.createElement("button");
+        retry.textContent = "Refresh orders";
+        retry.onclick = load;
+        box.append(heading, message, retry);
+        content.replaceChildren(box);
+      }
+    }
+    load();
+  </script>
+</html>

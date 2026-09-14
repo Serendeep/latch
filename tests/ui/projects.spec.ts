@@ -267,10 +267,31 @@ test("project creation, explicit scope deletion, accessible confirmation, and lo
         .analyze()
     ).violations,
   ).toEqual([]);
-  await page.screenshot({
-    path: "output/playwright/latch-request-dark.png",
-    fullPage: false,
-  });
+  for (const colorScheme of ["dark", "light"] as const) {
+    await page.emulateMedia({ colorScheme });
+    for (const width of [620, 420]) {
+      await page.setViewportSize({ width, height: 740 });
+      await expect(
+        agentDialog.getByRole("button", { name: "Approve and run once" }),
+      ).toBeInViewport();
+      await expect(agentDialog.getByLabel("SERVICE_TOKEN")).toBeInViewport();
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= window.innerWidth,
+        ),
+      ).toBe(true);
+      expect(
+        (
+          await new AxeBuilder({ page })
+            .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
+            .analyze()
+        ).violations,
+      ).toEqual([]);
+      await page.screenshot({
+        path: `output/playwright/latch-request-${colorScheme}-${width}.png`,
+      });
+    }
+  }
   await page.keyboard.press("Escape");
   await expect(agentDialog).not.toBeVisible();
 });

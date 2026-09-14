@@ -24,3 +24,6 @@ output/playwright/
 /docs/slice-*.md
 /docs/adr/
 /.local/
+
+# Local browser automation artifacts.
+.playwright-cli/

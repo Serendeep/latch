@@ -69,13 +69,18 @@ export default function AgentRequest({ epoch }: { epoch: string }) {
         void decide(false);
       }}
     >
-      <span className="dialog-kicker">One-time process access</span>
-      <h2 id="request-heading">Approve this command?</h2>
+      <header className="request-header">
+        <img src="/latch.svg" width="32" height="32" alt="" />
+        <div>
+          <span className="dialog-kicker">Latch · One-time access</span>
+          <h2 id="request-heading">Approve this command?</h2>
+        </div>
+      </header>
       {request ? (
-        <>
+        <div className="request-body">
           <dl className="request-scope">
-            <div>
-              <dt>Caller</dt>
+            <div className="request-caller">
+              <dt>Requested by</dt>
               <dd>
                 {agentName(request.agent)} · process {request.peer_pid}
               </dd>
@@ -88,8 +93,8 @@ export default function AgentRequest({ epoch }: { epoch: string }) {
               <dt>Environment</dt>
               <dd>{request.environment}</dd>
             </div>
-            <div>
-              <dt>Working directory</dt>
+            <div className="request-directory">
+              <dt>Directory</dt>
               <dd>
                 <code>{request.directory}</code>
               </dd>
@@ -109,16 +114,18 @@ export default function AgentRequest({ epoch }: { epoch: string }) {
               named executable still receives the arguments directly.
             </p>
           ) : null}
-          <div className="request-secrets">
-            <span>Secrets delivered to this process only</span>
-            <ul>
-              {request.secrets.map((secret) => (
-                <li key={`${secret.id}:${secret.revision}`}>
-                  <code>{secret.name}</code>
-                </li>
-              ))}
-            </ul>
-          </div>
+          {request.secrets.length ? (
+            <div className="request-secrets">
+              <span>Available for this command</span>
+              <ul>
+                {request.secrets.map((secret) => (
+                  <li key={`${secret.id}:${secret.revision}`}>
+                    <code>{secret.name}</code>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
           {request.missing.length ? (
             <form
               id="request-approval"
@@ -128,7 +135,9 @@ export default function AgentRequest({ epoch }: { epoch: string }) {
                 void decide(true, event.currentTarget);
               }}
             >
-              <span>Add missing secrets to this environment</span>
+              <span>
+                Add to {request.project_name} · {request.environment}
+              </span>
               {request.missing.map((name) => (
                 <label key={name}>
                   <code>{name}</code>
@@ -136,6 +145,8 @@ export default function AgentRequest({ epoch }: { epoch: string }) {
                     name={name}
                     type="password"
                     autoComplete="off"
+                    spellCheck={false}
+                    placeholder="Enter secret value"
                     required
                     maxLength={65536}
                     disabled={pending}
@@ -144,39 +155,41 @@ export default function AgentRequest({ epoch }: { epoch: string }) {
               ))}
             </form>
           ) : null}
-          <p className="dialog-note">
-            The process can read and leak these values. This approval permits
-            one launch attempt and cannot be reused.
-          </p>
-        </>
+        </div>
       ) : null}
       {message ? (
         <p role="alert" className="inline-alert">
           {message}
         </p>
       ) : null}
-      <div className="dialog-actions">
-        <button
-          ref={deny}
-          type="button"
-          autoFocus
-          disabled={pending}
-          onClick={() => void decide(false)}
-        >
-          Deny
-        </button>
-        <button
-          className="primary-action"
-          type="submit"
-          form="request-approval"
-          disabled={pending}
-          onClick={() => {
-            if (!request?.missing.length) void decide(true);
-          }}
-        >
-          Approve and run once
-        </button>
-      </div>
+      <footer className="request-footer">
+        <p className="dialog-note">
+          One launch only. The process can read and leak the secrets it
+          receives.
+        </p>
+        <div className="dialog-actions">
+          <button
+            ref={deny}
+            type="button"
+            autoFocus
+            disabled={pending}
+            onClick={() => void decide(false)}
+          >
+            Deny
+          </button>
+          <button
+            className="primary-action"
+            type="submit"
+            form="request-approval"
+            disabled={pending}
+            onClick={() => {
+              if (!request?.missing.length) void decide(true);
+            }}
+          >
+            Approve and run once
+          </button>
+        </div>
+      </footer>
     </dialog>
   );
 }

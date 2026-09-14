@@ -640,103 +640,187 @@ footer {
   overflow-wrap: anywhere;
 }
 
+/* The request reads top to bottom: caller, scope, command, values, decision. */
 .request-dialog {
   width: min(36rem, calc(100% - 2rem));
 }
-
+.request-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 24px 28px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.request-header h2 {
+  margin: 4px 0 0;
+  font-size: 1.35rem;
+  letter-spacing: -0.025em;
+}
+.request-header .dialog-kicker {
+  font-size: 0.7rem;
+}
+.request-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 20px 28px 24px;
+}
 .request-scope {
   display: grid;
-  gap: 0.75rem;
-  margin: 1.25rem 0;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px 24px;
+  margin: 0 0 20px;
 }
-
 .request-scope div {
   display: grid;
-  grid-template-columns: 8rem minmax(0, 1fr);
-  gap: 0.75rem;
+  gap: 5px;
+  min-width: 0;
 }
-
+.request-scope .request-caller,
+.request-scope .request-directory {
+  grid-column: 1 / -1;
+}
 .request-scope dt,
 .request-command > span,
 .request-secrets > span {
   color: var(--muted);
-  font-size: 0.78rem;
+  font-size: 0.75rem;
 }
-
 .request-scope dd {
   margin: 0;
   overflow-wrap: anywhere;
+  font-size: 0.875rem;
+  line-height: 1.45;
 }
-
+.request-directory code {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
 .request-command,
 .request-secrets {
   display: grid;
-  gap: 0.45rem;
-  margin: 1rem 0;
+  gap: 8px;
+  margin: 20px 0 0;
 }
-
-.request-missing {
-  display: grid;
-  gap: 0.75rem;
-  margin-top: 1rem;
-}
-
-.request-missing > span {
-  color: var(--text-secondary);
-  font-size: 0.82rem;
-  font-weight: 650;
-}
-
-.request-missing label {
-  display: grid;
-  gap: 0.4rem;
-}
-
 .request-command code {
   display: block;
-  max-height: 8rem;
+  max-height: 7rem;
   overflow: auto;
-  padding: 0.75rem;
+  padding: 12px 14px;
   border: 1px solid var(--border);
-  border-radius: 0.45rem;
+  background: var(--elevated);
+  border-radius: 8px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  font-size: 0.8rem;
+  line-height: 1.6;
 }
-
 .request-secrets ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  list-style: none;
   margin: 0;
-  padding-left: 1.25rem;
+  padding: 0;
 }
-
+.request-secrets li {
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font-size: 0.75rem;
+}
+.request-missing {
+  display: grid;
+  gap: 16px;
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+.request-missing > span {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+.request-missing label {
+  display: grid;
+  gap: 8px;
+  font-size: 0.8rem;
+}
+.request-missing input {
+  min-height: 44px;
+}
+.request-missing input::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+.request-footer {
+  font: inherit;
+  display: block;
+  flex-shrink: 0;
+  padding: 16px 28px 20px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+.request-footer .dialog-note {
+  margin: 0 0 14px;
+  font-size: 0.75rem;
+}
+.request-footer .dialog-actions {
+  margin: 0;
+  justify-content: flex-end;
+}
+.request-footer button {
+  min-height: 40px;
+}
 .risk-note {
   color: var(--danger);
+  font-size: 0.8rem;
 }
-
-@media (max-width: 520px) {
-  .request-scope div {
-    grid-template-columns: 1fr;
-    gap: 0.15rem;
-  }
-}
-
 .request-window {
-  padding: 24px;
-  min-height: 100vh;
+  padding: 32px;
+  min-height: 100dvh;
+  max-width: none;
+}
+.request-window > .dialog-kicker {
+  margin-top: 32px;
 }
 .request-window h1 {
   font-size: 26px;
+  letter-spacing: -0.03em;
+  margin: 12px 0;
+}
+.request-window form > .primary-action {
+  margin-top: 24px;
+  min-height: 44px;
+  width: 100%;
 }
 .request-window .request-dialog {
   width: 100%;
   max-width: none;
-  max-height: 100vh;
-  min-height: 100vh;
+  height: 100dvh;
+  max-height: 100dvh;
   margin: 0;
+  padding: 0;
   border: 0;
   border-radius: 0;
   box-shadow: none;
-  box-sizing: border-box;
+}
+.request-window .request-dialog[open] {
+  display: flex;
+  flex-direction: column;
 }
 .request-window .request-cancel {
-  margin-top: 20px;
+  margin-top: 16px;
+  align-self: flex-start;
+}
+@media (max-width: 460px) {
+  .request-header,
+  .request-body,
+  .request-footer {
+    padding-left: 20px;
+    padding-right: 20px;
+  }
+  .request-footer .dialog-actions {
+    display: grid;
+    grid-template-columns: auto 1fr;
+  }
 }
