@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "request",
+  "description": "The request popup can unlock and decide its pending request, but cannot browse or manage records.",
+  "windows": ["request"],
+  "permissions": [
+    "allow-app-status",
+    "allow-vault-unlock",
+    "allow-agent-request-view",
+    "allow-agent-request-decide",
+    "allow-agent-request-cancel",
+    "allow-open-manager"
+  ]
+}

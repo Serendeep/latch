@@ -5,8 +5,6 @@
   "windows": ["main"],
   "permissions": [
     "allow-app-status",
-    "allow-agent-request-view",
-    "allow-agent-request-decide",
     "allow-vault-create",
     "allow-vault-unlock",
     "allow-vault-lock",

@@ -55,6 +55,7 @@ fn sends_an_agent_neutral_request_to_the_owner_socket() {
 
 #[test]
 fn valid_request_is_refused_without_starting_the_child() {
+    let runtime = tempfile::tempdir().unwrap();
     // If the CLI mistakenly executes this command, it creates a marker via this test binary.
     let marker = std::env::temp_dir().join(format!("latch-no-launch-{}", std::process::id()));
     let output = Command::new(env!("CARGO_BIN_EXE_latch"))
@@ -72,6 +73,7 @@ fn valid_request_is_refused_without_starting_the_child() {
         .arg(std::env::current_exe().unwrap())
         .args(["--exact", "child_marker", "--ignored"])
         .env("LATCH_TEST_MARKER", &marker)
+        .env("XDG_RUNTIME_DIR", runtime.path())
         .output()
         .unwrap();
     assert!(

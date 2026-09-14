@@ -29,6 +29,7 @@ struct PendingRequest {
 }
 
 struct RequestState {
+    generation: std::sync::atomic::AtomicU64,
     #[cfg(target_os = "linux")]
     intake: Mutex<()>,
     pending: Mutex<Option<PendingRequest>>,
@@ -124,8 +125,8 @@ fn handle_agent(
             .map_err(|_| RunErrorCode::StaleReview)?;
         let _intake = requests
             .intake
-            .lock()
-            .map_err(|_| RunErrorCode::InternalFailure)?;
+            .try_lock()
+            .map_err(|_| RunErrorCode::QueueFull)?;
         if requests
             .pending
             .lock()
@@ -134,10 +135,31 @@ fn handle_agent(
         {
             return Err(RunErrorCode::QueueFull);
         }
-        let status = broker.status().map_err(run_error)?;
-        if !matches!(status.vault, latch_core::VaultAvailability::Unlocked) {
-            return Err(RunErrorCode::VaultLocked);
-        }
+        let generation = requests
+            .generation
+            .load(std::sync::atomic::Ordering::SeqCst);
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+        let deadline = std::time::Instant::now() + Duration::from_secs(300);
+        let status = loop {
+            if requests
+                .generation
+                .load(std::sync::atomic::Ordering::SeqCst)
+                != generation
+            {
+                return Ok(RunResponse::Denied);
+            }
+            let status = broker.status().map_err(run_error)?;
+            if matches!(status.vault, latch_core::VaultAvailability::Unlocked) {
+                break status;
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = window.hide();
+                return Err(RunErrorCode::VaultLocked);
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        };
         let mut request_id = [0; 16];
         getrandom::fill(&mut request_id).map_err(|_| RunErrorCode::InternalFailure)?;
         let pid = credentials.pid.as_raw_nonzero().get() as u32;
@@ -151,7 +173,10 @@ fn handle_agent(
                 },
                 status.lock_epoch.clone(),
             )
-            .map_err(run_error)?;
+            .map_err(|error| {
+                let _ = window.hide();
+                run_error(error)
+            })?;
         let id = run.view().id.clone();
         let (reply, receive) = std::sync::mpsc::sync_channel(1);
         {
@@ -162,6 +187,14 @@ fn handle_agent(
             if pending.is_some() {
                 return Err(RunErrorCode::QueueFull);
             }
+            if requests
+                .generation
+                .load(std::sync::atomic::Ordering::SeqCst)
+                != generation
+            {
+                let _ = broker.cancel_run(run, status.lock_epoch);
+                return Ok(RunResponse::Denied);
+            }
             *pending = Some(PendingRequest {
                 run,
                 epoch: status.lock_epoch,
@@ -170,9 +203,6 @@ fn handle_agent(
             });
         }
         drop(_intake);
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
         match receive.recv_timeout(Duration::from_secs(300)) {
             Ok(response) => Ok(response),
             Err(_) => {
@@ -184,6 +214,7 @@ fn handle_agent(
                 if let Some(expired) = expired {
                     let _ = broker.expire_run(expired.run, expired.epoch);
                 }
+                let _ = window.hide();
                 Err(RunErrorCode::StaleReview)
             }
         }
@@ -333,13 +364,63 @@ fn authorize(window: &tauri::WebviewWindow) -> Result<(), BrokerError> {
     Ok(())
 }
 
+fn authorize_request(window: &tauri::WebviewWindow) -> Result<(), BrokerError> {
+    if window.label() == "request" {
+        Ok(())
+    } else {
+        Err(BrokerError::InvalidState)
+    }
+}
+
+fn cancel_request(broker: &Broker, requests: &RequestState) -> Result<(), BrokerError> {
+    let mut slot = requests
+        .pending
+        .lock()
+        .map_err(|_| BrokerError::StorageUnavailable)?;
+    requests
+        .generation
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let pending = slot.take();
+    drop(slot);
+    if let Some(pending) = pending {
+        let result = broker.deny_run(pending.run, pending.epoch);
+        let _ = pending.reply.send(RunResponse::Denied);
+        result?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn agent_request_cancel(
+    window: tauri::WebviewWindow,
+    broker: tauri::State<'_, Arc<Broker>>,
+    requests: tauri::State<'_, Arc<RequestState>>,
+) -> Result<(), BrokerError> {
+    authorize_request(&window)?;
+    let result = cancel_request(&broker, &requests);
+    let _ = window.hide();
+    result
+}
+
+#[tauri::command]
+fn open_manager(window: tauri::WebviewWindow) -> Result<(), BrokerError> {
+    authorize_request(&window)?;
+    let main = window
+        .app_handle()
+        .get_webview_window("main")
+        .ok_or(BrokerError::InvalidState)?;
+    main.show().map_err(|_| BrokerError::InvalidState)?;
+    let _ = main.set_focus();
+    Ok(())
+}
+
 #[tauri::command]
 fn agent_request_view(
     window: tauri::WebviewWindow,
     broker: tauri::State<'_, Arc<Broker>>,
     requests: tauri::State<'_, Arc<RequestState>>,
 ) -> Result<Option<RunReview>, BrokerError> {
-    authorize(&window)?;
+    authorize_request(&window)?;
     let mut pending = requests
         .pending
         .lock()
@@ -369,7 +450,7 @@ async fn agent_request_decide(
     approved: bool,
     missing: Vec<MissingSecretInput>,
 ) -> Result<Option<LaunchReceipt>, BrokerError> {
-    authorize(&window)?;
+    authorize_request(&window)?;
     let pending = {
         let mut slot = requests
             .pending
@@ -416,6 +497,7 @@ async fn agent_request_decide(
         },
     };
     let _ = reply.send(response);
+    let _ = window.hide();
     result
 }
 
@@ -425,7 +507,9 @@ fn app_status(
     broker: tauri::State<'_, Arc<Broker>>,
     clipboard: tauri::State<'_, Arc<ClipboardState>>,
 ) -> Result<AppStatus, BrokerError> {
-    authorize(&window)?;
+    if window.label() != "request" {
+        authorize(&window)?;
+    }
     let status = broker.status();
     if !matches!(
         &status,
@@ -460,7 +544,9 @@ async fn vault_unlock(
     passphrase: String,
     lock_epoch: String,
 ) -> Result<AppStatus, BrokerError> {
-    authorize(&window)?;
+    if window.label() != "request" {
+        authorize(&window)?;
+    }
     let broker = Arc::clone(&broker);
     tauri::async_runtime::spawn_blocking(move || broker.unlock(passphrase, lock_epoch))
         .await
@@ -991,6 +1077,15 @@ fn secret_copy(
 
 fn main() {
     if tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, args, _| {
+            if !args.iter().any(|arg| arg == "--background")
+                && let Some(main) = app.get_webview_window("main")
+            {
+                let _ = main.show();
+                let _ = main.unminimize();
+                let _ = main.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .manage(Arc::new(std::sync::Mutex::new(())))
         .manage(Arc::new(ClipboardState::new()))
@@ -1001,6 +1096,7 @@ fn main() {
                 .map_err(|_| std::io::Error::other("Application data is unavailable."))?;
             let broker = Arc::new(Broker::start(directory.join("vault")));
             let requests = Arc::new(RequestState {
+                generation: std::sync::atomic::AtomicU64::new(0),
                 #[cfg(target_os = "linux")]
                 intake: Mutex::new(()),
                 pending: Mutex::new(None),
@@ -1010,20 +1106,86 @@ fn main() {
             #[cfg(target_os = "linux")]
             {
                 let window = app
-                    .get_webview_window("main")
+                    .get_webview_window("request")
                     .ok_or_else(|| std::io::Error::other("Main window is unavailable."))?;
                 let socket = start_agent_listener(window, broker, requests)
                     .map_err(|_| std::io::Error::other("Agent transport is unavailable."))?;
                 app.manage(socket);
             }
+            let open =
+                tauri::menu::MenuItem::with_id(app, "open", "Open Latch", true, None::<&str>)?;
+            let lock =
+                tauri::menu::MenuItem::with_id(app, "lock", "Lock Vault", true, None::<&str>)?;
+            let quit =
+                tauri::menu::MenuItem::with_id(app, "quit", "Quit Latch", true, None::<&str>)?;
+            let menu = tauri::menu::Menu::with_items(app, &[&open, &lock, &quit])?;
+            tauri::tray::TrayIconBuilder::with_id("latch")
+                .icon(tauri::image::Image::from_bytes(include_bytes!(
+                    "../icons/icon.png"
+                ))?)
+                .tooltip("Latch")
+                .menu(&menu)
+                .show_menu_on_left_click(true)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "open" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.unminimize();
+                            let _ = window.set_focus();
+                        }
+                    }
+                    "lock" | "quit" => {
+                        let broker = app.state::<Arc<Broker>>();
+                        let requests = app.state::<Arc<RequestState>>();
+                        let _ = cancel_request(&broker, &requests);
+                        let _ = broker.lock();
+                        if let Some(window) = app.get_webview_window("request") {
+                            let _ = window.hide();
+                        }
+                        let clipboard = app.state::<Arc<ClipboardState>>();
+                        clipboard.clear_if_owned(None);
+                        if event.id.as_ref() == "quit" {
+                            app.exit(0);
+                        }
+                    }
+                    _ => {}
+                })
+                .build(app)?;
+            if !std::env::args_os().any(|arg| arg == "--background")
+                && let Some(main) = app.get_webview_window("main")
+            {
+                let _ = main.show();
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
+            if window.label() == "request" {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    if let (Some(broker), Some(requests)) = (
+                        window.try_state::<Arc<Broker>>(),
+                        window.try_state::<Arc<RequestState>>(),
+                    ) {
+                        let _ = cancel_request(&broker, &requests);
+                    }
+                    let _ = window.hide();
+                }
+                return;
+            }
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
             if matches!(
                 event,
                 tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed
             ) && let Some(broker) = window.try_state::<Arc<Broker>>()
             {
+                if let Some(requests) = window.try_state::<Arc<RequestState>>() {
+                    requests
+                        .generation
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
                 if let Some(requests) = window.try_state::<Arc<RequestState>>()
                     && let Ok(mut pending) = requests.pending.lock()
                     && let Some(pending) = pending.take()
@@ -1037,6 +1199,10 @@ fn main() {
                     });
                 }
                 let _ = broker.lock();
+                // Drop revealed values from the hidden renderer instead of waiting for its timer.
+                if let Some(main) = window.app_handle().get_webview_window("main") {
+                    let _ = main.eval("window.location.reload()");
+                }
                 if let Some(clipboard) = window.try_state::<Arc<ClipboardState>>() {
                     clear_clipboard_now(window.app_handle().clone(), Arc::clone(&clipboard));
                 }
@@ -1046,6 +1212,8 @@ fn main() {
             app_status,
             agent_request_view,
             agent_request_decide,
+            agent_request_cancel,
+            open_manager,
             vault_create,
             vault_unlock,
             vault_lock,

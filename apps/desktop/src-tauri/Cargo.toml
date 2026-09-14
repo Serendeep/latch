@@ -15,8 +15,9 @@ tauri-build = { version = "=2.6.3", features = [] }
 [dependencies]
 arboard = { version = "=3.6.1", default-features = false }
 latch-core.workspace = true
-tauri = { version = "=2.11.5", features = [] }
+tauri = { version = "=2.11.5", features = ["tray-icon", "image-png"] }
 tauri-plugin-dialog = "=2.7.3"
+tauri-plugin-single-instance = "=2.4.4"
 zeroize.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]

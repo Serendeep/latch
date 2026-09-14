@@ -97,6 +97,15 @@ def main():
             result = request("POST", "/session", {"capabilities": {"alwaysMatch": {"tauri:options": {"application": str(app)}}}})
             session = result["value"]["sessionId"]
             prefix = f"/session/{session}"
+            handles = request("GET", prefix + "/window/handles")["value"]
+            main_handle = None
+            for handle in handles:
+                request("POST", prefix + "/window", {"handle": handle})
+                route = request("POST", prefix + "/execute/sync", {"script": "return location.search;", "args": []})["value"]
+                if route != "?request":
+                    main_handle = handle
+            assert main_handle is not None, "Management window missing"
+            request("POST", prefix + "/window", {"handle": main_handle})
             result = request("POST", prefix + "/execute/async", {"script": "const done = arguments[arguments.length - 1]; window.__TAURI_INTERNALS__.invoke('app_status').then(done, e => done({error: ['storage_unavailable','already_running','recovery_required'].includes(e) ? e : 'unexpected'}));", "args": []})
             for _ in range(50):
                 if result["value"] == {"protocol_version": 1, "lock_epoch": "0", "vault": "absent"}:
@@ -120,6 +129,12 @@ def main():
                 result = request("POST", prefix + "/execute/async", {"script": VAULT_FLOW, "args": []})
                 assert result["value"] is True, "Native vault flow failed"
                 print("Passed: native vault lifecycle, project listing, invalid selection denial, and lock clearing.")
+            for handle in handles:
+                if handle == main_handle:
+                    continue
+                request("POST", prefix + "/window", {"handle": handle})
+                denied = request("POST", prefix + "/execute/async", {"script": "const done = arguments[arguments.length - 1]; window.__TAURI_INTERNALS__.invoke('projects_list', {cursor:null, lockEpoch:'0'}).then(() => done(false), () => done(true));", "args": []})
+                assert denied["value"] is True, "Request window can browse projects"
             print("Passed: native status IPC, ungranted command denied, actual UI availability.")
         finally:
             if session:

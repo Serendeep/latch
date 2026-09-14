@@ -5,6 +5,8 @@ fn main() {
             "app_status",
             "agent_request_view",
             "agent_request_decide",
+            "agent_request_cancel",
+            "open_manager",
             "vault_create",
             "vault_unlock",
             "vault_lock",

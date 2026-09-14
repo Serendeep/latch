@@ -29,12 +29,13 @@ export default function AgentRequest({ epoch }: { epoch: string }) {
     };
   }, []);
 
+  const requestId = request?.id;
   useEffect(() => {
-    if (request) {
+    if (requestId) {
       dialog.current?.showModal();
       deny.current?.focus();
     } else dialog.current?.close();
-  }, [request]);
+  }, [requestId]);
 
   async function decide(approved: boolean, form?: HTMLFormElement) {
     if (!request || pending) return;

@@ -82,6 +82,9 @@ textarea {
   background: color-mix(in srgb, var(--surface) 82%, transparent);
 }
 .wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   font:
     600 1.05rem ui-monospace,
     "SFMono-Regular",
@@ -714,4 +717,26 @@ footer {
     grid-template-columns: 1fr;
     gap: 0.15rem;
   }
+}
+
+.request-window {
+  padding: 24px;
+  min-height: 100vh;
+}
+.request-window h1 {
+  font-size: 26px;
+}
+.request-window .request-dialog {
+  width: 100%;
+  max-width: none;
+  max-height: 100vh;
+  min-height: 100vh;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  box-sizing: border-box;
+}
+.request-window .request-cancel {
+  margin-top: 20px;
 }

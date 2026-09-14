@@ -148,31 +148,6 @@ test("project creation, explicit scope deletion, accessible confirmation, and lo
       fullPage: true,
     });
   }
-  await page.evaluate(() =>
-    (window as unknown as { showAgentRequest: () => void }).showAgentRequest(),
-  );
-  const agentDialog = page.getByRole("dialog", {
-    name: "Approve this command?",
-  });
-  await expect(agentDialog).toBeVisible();
-  await expect(agentDialog.getByRole("button", { name: "Deny" })).toBeFocused();
-  await expect(agentDialog.getByLabel("SERVICE_TOKEN")).toHaveAttribute(
-    "type",
-    "password",
-  );
-  expect(
-    (
-      await new AxeBuilder({ page })
-        .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
-        .analyze()
-    ).violations,
-  ).toEqual([]);
-  await page.screenshot({
-    path: "docs/assets/latch-request-dark.png",
-    fullPage: false,
-  });
-  await page.keyboard.press("Escape");
-  await expect(agentDialog).not.toBeVisible();
   await page.getByRole("button", { name: "Import .env", exact: true }).click();
   const review = page.getByRole("dialog", { name: "Review import" });
   await expect(review).toBeVisible();
@@ -272,4 +247,30 @@ test("project creation, explicit scope deletion, accessible confirmation, and lo
   await expect(
     page.getByText("/tmp/latch-example-project", { exact: true }),
   ).toHaveCount(0);
+  await page.goto("/?request");
+  await page.evaluate(() =>
+    (window as unknown as { showAgentRequest: () => void }).showAgentRequest(),
+  );
+  const agentDialog = page.getByRole("dialog", {
+    name: "Approve this command?",
+  });
+  await expect(agentDialog).toBeVisible();
+  await expect(agentDialog.getByRole("button", { name: "Deny" })).toBeFocused();
+  await expect(agentDialog.getByLabel("SERVICE_TOKEN")).toHaveAttribute(
+    "type",
+    "password",
+  );
+  expect(
+    (
+      await new AxeBuilder({ page })
+        .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
+        .analyze()
+    ).violations,
+  ).toEqual([]);
+  await page.screenshot({
+    path: "output/playwright/latch-request-dark.png",
+    fullPage: false,
+  });
+  await page.keyboard.press("Escape");
+  await expect(agentDialog).not.toBeVisible();
 });

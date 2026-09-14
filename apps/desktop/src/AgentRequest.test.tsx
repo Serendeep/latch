@@ -70,3 +70,19 @@ test("denial sends no values", async () => {
     }),
   );
 });
+
+test("polling an unchanged request preserves focus while entering a value", async () => {
+  let polls = 0;
+  vi.mocked(invoke).mockImplementation(() => {
+    polls += 1;
+    return Promise.resolve({ ...review });
+  });
+  render(<AgentRequest epoch="7" />);
+  const field = await screen.findByLabelText("SERVICE_TOKEN");
+  await userEvent.click(field);
+  const initial = polls;
+  await waitFor(() => expect(polls).toBeGreaterThan(initial), {
+    timeout: 1500,
+  });
+  expect(document.activeElement === field).toBe(true);
+});

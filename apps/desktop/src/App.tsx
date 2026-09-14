@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import Projects from "./Projects";
-import AgentRequest from "./AgentRequest";
 import { changeVault, getAppStatus, lockVault } from "./api";
 
 import type { VaultAvailability } from "./generated/core";
@@ -113,7 +112,8 @@ export default function App() {
       </a>
       <header className="app-header">
         <span className="wordmark">
-          latch<span aria-hidden="true">.</span>
+          <img src="/latch.svg" width="28" height="28" alt="" />
+          <span>latch</span>
         </span>
         <label className="theme-control">
           Appearance
@@ -246,7 +246,6 @@ export default function App() {
         <span>Project → Environment → Secret</span>
         <span>Local only</span>
       </footer>
-      {status === "unlocked" ? <AgentRequest epoch={lockEpoch} /> : null}
     </div>
   );
 }
