@@ -96,7 +96,7 @@ impl Database {
             tx.commit()?;
             file.sync_all()?;
             File::open(directory)?.sync_all()?;
-        } else if !(1..=3).contains(&version) || app != 1279349827 {
+        } else if !(1..=4).contains(&version) || app != 1279349827 {
             return Err(BrokerError::StorageUnavailable);
         }
         let expected = Connection::open_in_memory()?;
@@ -104,8 +104,11 @@ impl Database {
         if version >= 2 {
             expected.execute_batch(include_str!("../migrations/0002_projects.up.sql"))?;
         }
-        if version == 3 {
+        if version >= 3 {
             expected.execute_batch(include_str!("../migrations/0003_secrets.up.sql"))?;
+        }
+        if version == 4 {
+            expected.execute_batch(include_str!("../migrations/0004_copy_audit.up.sql"))?;
         }
         if schema(&connection)? != schema(&expected)? {
             return Err(BrokerError::StorageUnavailable);
@@ -134,6 +137,17 @@ impl Database {
             tx.execute_batch(include_str!("../migrations/0003_secrets.up.sql"))?;
             tx.commit()?;
             expected.execute_batch(include_str!("../migrations/0003_secrets.up.sql"))?;
+            if schema(&connection)? != schema(&expected)? {
+                return Err(BrokerError::StorageUnavailable);
+            }
+            file.sync_all()?;
+            File::open(directory)?.sync_all()?;
+        }
+        if version < 4 {
+            let tx = connection.transaction()?;
+            tx.execute_batch(include_str!("../migrations/0004_copy_audit.up.sql"))?;
+            tx.commit()?;
+            expected.execute_batch(include_str!("../migrations/0004_copy_audit.up.sql"))?;
             if schema(&connection)? != schema(&expected)? {
                 return Err(BrokerError::StorageUnavailable);
             }
@@ -352,6 +366,8 @@ mod tests {
         let mut db = Database::open(dir.path()).expect("open failed");
         {
             let tx = db.connection.transaction().expect("transaction failed");
+            tx.execute_batch(include_str!("../migrations/0004_copy_audit.down.sql"))
+                .expect("copy audit schema reversal failed");
             tx.execute_batch(include_str!("../migrations/0003_secrets.down.sql"))
                 .expect("secret schema reversal failed");
             tx.execute_batch(include_str!("../migrations/0002_projects.down.sql"))
@@ -386,5 +402,27 @@ mod tests {
         assert!(db.finish(&wrapped).is_err());
         assert!(db.wrapped().expect("read failed").is_none());
         assert!(db.interrupted().expect("read failed"));
+    }
+
+    #[test]
+    fn copy_audit_history_prevents_schema_downgrade() {
+        let dir = tempfile::tempdir().expect("temp directory failed");
+        std::fs::set_permissions(
+            dir.path(),
+            <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o700),
+        )
+        .expect("private directory failed");
+        let mut db = Database::open(dir.path()).expect("open failed");
+        db.connection
+            .execute(
+                "INSERT INTO audit_events(occurred_at_ms,operation,result) VALUES (1,13,1)",
+                [],
+            )
+            .expect("copy audit failed");
+        let tx = db.connection.transaction().expect("transaction failed");
+        assert!(
+            tx.execute_batch(include_str!("../migrations/0004_copy_audit.down.sql"))
+                .is_err()
+        );
     }
 }

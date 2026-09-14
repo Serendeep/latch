@@ -19,6 +19,7 @@
     "allow-secret-create",
     "allow-secret-update",
     "allow-secret-delete",
-    "allow-secret-reveal"
+    "allow-secret-reveal",
+    "allow-secret-copy"
   ]
 }

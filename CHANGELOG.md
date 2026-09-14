@@ -6,6 +6,7 @@ Notable changes to Latch are recorded here. No public release has been published
 
 ### Added
 
+- Rust-owned one-record clipboard copy with bounded expiry, ownership checks, platform history-exclusion hints, and metadata-only audit operation 13.
 - Linux secret create, metadata-only listing, metadata/value updates, confirmed deletion, and deliberate one-record reveal through narrow Tauri commands.
 - Separate authenticated metadata/value encryption, ciphertext-only SQLite records, optimistic revisions, scoped uniqueness and capacity checks, and atomic metadata-only audit events.
 - A compact environment workspace with concealed values, entry and deletion dialogs, light/dark themes, keyboard behavior, and WCAG AA checks.
@@ -26,5 +27,5 @@ Notable changes to Latch are recorded here. No public release has been published
 ### Not yet available
 
 - macOS and Windows vault operations pending credential-store qualification.
-- Clipboard copy with timed clearing, agent approval, and process injection.
+- Agent approval and process injection.
 - Agent integrations, audit archives, and portable backups.

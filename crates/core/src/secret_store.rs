@@ -198,18 +198,22 @@ impl Database {
         Ok(())
     }
 
-    pub(crate) fn audit_reveal(
+    pub(crate) fn audit_disclosure(
         &self,
         project: &[u8; 16],
         environment: &[u8; 16],
         id: &[u8; 16],
+        operation: u8,
     ) -> Result<(), BrokerError> {
+        if !matches!(operation, 12 | 13) {
+            return Err(BrokerError::InvalidState);
+        }
         self.audit_capacity()?;
         self.connection
             .execute(
                 "INSERT INTO audit_events(occurred_at_ms,operation,result,project_id,environment_id,secret_id) \
-                 VALUES (?1,12,1,?2,?3,?4)",
-                params![now_ms(), project, environment, id],
+                 VALUES (?1,?2,1,?3,?4,?5)",
+                params![now_ms(), operation, project, environment, id],
             )
             .map_err(|_| BrokerError::AuditUnavailable)?;
         Ok(())

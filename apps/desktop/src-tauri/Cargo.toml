@@ -13,9 +13,11 @@ custom-protocol = ["tauri/custom-protocol"]
 tauri-build = { version = "=2.6.3", features = [] }
 
 [dependencies]
+arboard = { version = "=3.6.1", default-features = false }
 latch-core.workspace = true
 tauri = { version = "=2.11.5", features = [] }
 tauri-plugin-dialog = "=2.7.3"
+zeroize.workspace = true
 
 [lints]
 workspace = true

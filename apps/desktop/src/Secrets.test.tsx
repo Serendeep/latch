@@ -77,3 +77,44 @@ test("clears an unsaved value when the editor closes", async () => {
   await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
   await waitFor(() => expect(value).toHaveValue(""));
 });
+
+test("copies through narrow IPC with a bounded clear period", async () => {
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "secrets_list")
+      return Promise.resolve([
+        {
+          id: "d".repeat(32),
+          name: "SERVICE_TOKEN",
+          description: "Generated test credential",
+          tags: [],
+          revision: "1",
+        },
+      ]);
+    if (command === "secret_copy") {
+      expect(args).toEqual({
+        lockEpoch: "1",
+        projectId: "e".repeat(32),
+        environment: "staging",
+        id: "d".repeat(32),
+        revision: "1",
+        confirmed: true,
+        clearAfterSeconds: 60,
+      });
+      return Promise.resolve(60);
+    }
+    return Promise.reject("invalid_secret");
+  });
+
+  render(
+    <Secrets epoch="1" projectId={"e".repeat(32)} environment="staging" />,
+  );
+  await screen.findByText("SERVICE_TOKEN");
+  await userEvent.selectOptions(screen.getByLabelText("Clear copies"), "60");
+  await userEvent.click(
+    screen.getByRole("button", { name: "Copy SERVICE_TOKEN" }),
+  );
+
+  expect(await screen.findByRole("status")).toHaveTextContent(
+    "SERVICE_TOKEN copied. Clears in 60 seconds if unchanged.",
+  );
+});

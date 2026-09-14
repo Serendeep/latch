@@ -18,6 +18,7 @@ fn main() {
             "secret_update",
             "secret_delete",
             "secret_reveal",
+            "secret_copy",
         ]),
     ))
     .expect("Could not build desktop configuration");

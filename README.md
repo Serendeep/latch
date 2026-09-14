@@ -10,11 +10,11 @@ Latch is being built around a simple workflow: an agent requests named credentia
 
 ## Status
 
-**Early development. Linux vault, project management, and scoped secret CRUD are implemented; command delivery is not available yet.**
+**Early development. Linux vault, project management, scoped secret CRUD, reveal, and clipboard copy are implemented; command delivery is not available yet.**
 
 On Linux, you can create an empty encrypted vault, unlock it with a separate Latch passphrase, and lock it again. The first credential-store adapter requires GNOME Keyring’s unlocked, password-protected login collection. macOS and Windows vault operations remain unavailable pending native credential-store qualification.
 
-Vault keys stay in Rust. SQLite stores the authenticated wrapped key and separately encrypted secret metadata and values; the GNOME login keyring stores separate random device material. Unlocking requires both that material and the passphrase. The vault locks after five minutes, and explicit locking cancels outstanding operations. Audit records cover vault creation, unlock outcomes, locking, project/environment changes, secret changes, and individual reveals. Weekly archives are not implemented yet.
+Vault keys stay in Rust. SQLite stores the authenticated wrapped key and separately encrypted secret metadata and values; the GNOME login keyring stores separate random device material. Unlocking requires both that material and the passphrase. The vault locks after five minutes, and explicit locking cancels outstanding operations. Audit records cover vault creation, unlock outcomes, locking, project/environment changes, secret changes, individual reveals, and copy access. Weekly archives are not implemented yet.
 
 The desktop follows system, light, or dark appearance. The CLI still validates requests and refuses to launch them. Claude Code and Codex integrations have not yet been tested.
 
@@ -77,7 +77,7 @@ Renaming preserves the directory binding. Removing an environment requires confi
 
 Select an environment, then add a variable name, optional description and tags, and its value. Names are unique within that environment without ASCII case distinctions. Lists decrypt and return metadata only; a value reaches the webview only after choosing **Reveal** for that one record, and is concealed again after 15 seconds or a scope change. Create, update, delete, and reveal each record metadata-only audit events.
 
-The value entry uses an uncontrolled password field and clears when submitted or dismissed. JavaScript and operating-system memory cannot be guaranteed to be wiped. Copy with timed clipboard clearing is not implemented, so Latch offers no copy action yet. This remains an early development build; use generated test credentials while evaluating it.
+The value entry uses an uncontrolled password field and clears when submitted or dismissed. JavaScript and operating-system memory cannot be guaranteed to be wiped. **Copy** never returns the value to React and can clear it after 15, 30, or 60 seconds. Latch clears only when the clipboard still contains its latest copied value, so a later user copy is preserved. Platform history-exclusion hints are best effort; clipboard managers and same-user software can still read or retain copied values. This remains an early development build; use generated test credentials while evaluating it.
 
 ### Interrupted first setup
 

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import {
+  copySecret,
   createSecret,
   deleteSecret,
   listSecrets,
@@ -18,6 +19,8 @@ export default function Secrets({ epoch, projectId, environment }: Props) {
   const [items, setItems] = useState<SecretSummary[] | null>(null);
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState("");
+  const [notice, setNotice] = useState("");
+  const [clearAfter, setClearAfter] = useState<15 | 30 | 60>(30);
   const [editing, setEditing] = useState<SecretSummary | "new" | null>(null);
   const [deleting, setDeleting] = useState<SecretSummary | null>(null);
   const [revealed, setRevealed] = useState<{
@@ -66,6 +69,7 @@ export default function Secrets({ epoch, projectId, environment }: Props) {
     if (pending) return;
     setPending(true);
     setMessage("");
+    setNotice("");
     setRevealed(null);
     try {
       const result = await operation();
@@ -88,13 +92,30 @@ export default function Secrets({ epoch, projectId, environment }: Props) {
           <span className="scope-kicker">{environment}</span>
           <h3 id="secrets-heading">Secrets</h3>
         </div>
-        <button
-          className="primary-action"
-          type="button"
-          onClick={() => setEditing("new")}
-        >
-          Add secret
-        </button>
+        <div className="secret-heading-actions">
+          <label>
+            Clear copies
+            <select
+              value={clearAfter}
+              onChange={(event) => {
+                const seconds = Number(event.currentTarget.value);
+                if (seconds === 15 || seconds === 30 || seconds === 60)
+                  setClearAfter(seconds);
+              }}
+            >
+              <option value="15">15 sec</option>
+              <option value="30">30 sec</option>
+              <option value="60">1 min</option>
+            </select>
+          </label>
+          <button
+            className="primary-action"
+            type="button"
+            onClick={() => setEditing("new")}
+          >
+            Add secret
+          </button>
+        </div>
       </div>
       <p className="supporting-text scope-copy">
         Only this environment. Missing names never fall back to another scope.
@@ -104,6 +125,7 @@ export default function Secrets({ epoch, projectId, environment }: Props) {
           {message}
         </p>
       ) : null}
+      {notice ? <output className="inline-status">{notice}</output> : null}
       {!items ? (
         <output className="table-state">
           {message ? "Secrets could not be loaded." : "Loading secrets…"}
@@ -151,6 +173,7 @@ export default function Secrets({ epoch, projectId, environment }: Props) {
                       <button
                         type="button"
                         className="text-action"
+                        aria-label={`${visible ? "Hide" : "Reveal"} ${secret.name}`}
                         disabled={pending}
                         onClick={() => {
                           if (visible) {
@@ -185,6 +208,41 @@ export default function Secrets({ epoch, projectId, environment }: Props) {
                         }}
                       >
                         {visible ? "Hide" : "Reveal"}
+                      </button>
+                      <button
+                        type="button"
+                        className="text-action"
+                        aria-label={`Copy ${secret.name}`}
+                        disabled={pending}
+                        onClick={() => {
+                          setPending(true);
+                          setMessage("");
+                          setNotice("");
+                          void copySecret(
+                            epoch,
+                            projectId,
+                            environment,
+                            secret,
+                            clearAfter,
+                          )
+                            .then(
+                              (seconds) => {
+                                if (active.current)
+                                  setNotice(
+                                    `${secret.name} copied. Clears in ${seconds} seconds if unchanged.`,
+                                  );
+                              },
+                              (error: unknown) => {
+                                if (active.current)
+                                  setMessage(secretError(error));
+                              },
+                            )
+                            .finally(() => {
+                              if (active.current) setPending(false);
+                            });
+                        }}
+                      >
+                        Copy
                       </button>
                     </td>
                     <td className="row-actions">
@@ -403,6 +461,8 @@ function secretError(error: unknown): string {
       return "Another vault operation is running.";
     case "audit_unavailable":
       return "Audit history could not be saved. Nothing was disclosed or changed.";
+    case "clipboard_unavailable":
+      return "The system clipboard is unavailable. Nothing was copied.";
     default:
       return "Secret data could not be read or saved. Existing data was preserved.";
   }

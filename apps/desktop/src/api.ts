@@ -159,3 +159,21 @@ export function revealSecret(
     confirmed: true,
   });
 }
+
+export function copySecret(
+  lockEpoch: string,
+  projectId: string,
+  environment: Environment,
+  secret: SecretSummary,
+  clearAfterSeconds: 15 | 30 | 60,
+): Promise<number> {
+  return invoke("secret_copy", {
+    lockEpoch,
+    projectId,
+    environment,
+    id: secret.id,
+    revision: secret.revision,
+    confirmed: true,
+    clearAfterSeconds,
+  });
+}

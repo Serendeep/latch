@@ -33,6 +33,8 @@ pub enum BrokerError {
     KeyStoreUnavailable,
     /// Durable audit metadata could not be written.
     AuditUnavailable,
+    /// The operating-system clipboard could not accept or retain the value.
+    ClipboardUnavailable,
     /// Wrong passphrase/device material or damaged ciphertext.
     UnlockFailed,
     /// The passphrase does not satisfy the format policy.
@@ -174,6 +176,17 @@ pub enum SecretCommand {
     },
     /// Reveal exactly one reviewed secret value.
     Reveal {
+        /// Opaque project identity.
+        project_id: String,
+        /// Explicit environment kind.
+        environment: protocol::Environment,
+        /// Opaque secret identity.
+        id: String,
+        /// Expected decimal revision.
+        revision: String,
+    },
+    /// Copy exactly one reviewed secret value through a Rust-owned clipboard adapter.
+    Copy {
         /// Opaque project identity.
         project_id: String,
         /// Explicit environment kind.
@@ -359,6 +372,12 @@ impl Broker {
                 ..
             }
             | SecretCommand::Reveal {
+                project_id,
+                id,
+                revision,
+                ..
+            }
+            | SecretCommand::Copy {
                 project_id,
                 id,
                 revision,
@@ -1194,6 +1213,11 @@ mod linux {
                 project_id,
                 environment,
                 ..
+            }
+            | SecretCommand::Copy {
+                project_id,
+                environment,
+                ..
             } => (project_id, *environment),
         };
         let project_id = parse_id(project_text)?;
@@ -1209,7 +1233,15 @@ mod linux {
             )?));
         }
 
-        if let SecretCommand::Reveal { id, revision, .. } = command {
+        if matches!(
+            command,
+            SecretCommand::Reveal { .. } | SecretCommand::Copy { .. }
+        ) {
+            let (id, revision, operation) = match command {
+                SecretCommand::Reveal { id, revision, .. } => (id, revision, 12),
+                SecretCommand::Copy { id, revision, .. } => (id, revision, 13),
+                _ => unreachable!(),
+            };
             let id = parse_id(&id)?;
             let revision = parse_revision(&revision)?;
             let row = db
@@ -1227,7 +1259,7 @@ mod linux {
             let scope = SecretScope::new(project_id, environment_id, id, revision)?;
             row.sealed.open_metadata(key, scope)?;
             let value = row.sealed.open_value(key, scope)?;
-            db.audit_reveal(&project_id, &environment_id, &id)?;
+            db.audit_disclosure(&project_id, &environment_id, &id, operation)?;
             return Ok(SecretResult::Revealed(RevealedSecret {
                 id: hex(&id),
                 revision: revision.to_string(),
@@ -1710,6 +1742,21 @@ mod tests {
             panic!("reveal returned metadata")
         };
         assert!(revealed.value.as_str() == secret_value.as_str());
+        let copied = broker
+            .secrets(
+                SecretCommand::Copy {
+                    project_id: project_id.clone(),
+                    environment: protocol::Environment::Development,
+                    id: secret_id.clone(),
+                    revision: "2".into(),
+                },
+                epoch.clone(),
+            )
+            .unwrap();
+        let SecretResult::Revealed(copied) = copied else {
+            panic!("copy returned metadata")
+        };
+        assert!(copied.value.as_str() == secret_value.as_str());
         assert!(matches!(
             broker.secrets(
                 SecretCommand::Delete {
@@ -1889,12 +1936,12 @@ mod tests {
         let secret_events: i64 = db
             .connection
             .query_row(
-                "SELECT count(*) FROM audit_events WHERE operation BETWEEN 9 AND 12",
+                "SELECT count(*) FROM audit_events WHERE operation BETWEEN 9 AND 13",
                 [],
                 |row| row.get(0),
             )
             .expect("secret audit read failed");
-        assert!(secret_events == 4, "secret audit events missing");
+        assert!(secret_events == 5, "secret audit events missing");
         let bytes = std::fs::read(dir.path().join("vault.sqlite3")).expect("database read failed");
         assert!(
             !bytes.windows(input.len()).any(|b| b == input.as_bytes()),
