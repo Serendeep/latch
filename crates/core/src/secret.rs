@@ -276,7 +276,7 @@ mod tests {
         SecretScope::new([1; 16], [2; 16], [3; 16], 1).unwrap()
     }
 
-    fn generated() -> Zeroizing<String> {
+    pub(super) fn generated() -> Zeroizing<String> {
         let mut bytes = Zeroizing::new([0; 32]);
         getrandom::fill(&mut *bytes).expect("test RNG failed");
         Zeroizing::new(bytes.iter().map(|b| format!("{b:02x}")).collect())
@@ -441,5 +441,180 @@ mod tests {
                 .expose()
                 .is_empty()
         );
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod persistence_tests {
+    use super::*;
+    use crate::{
+        broker::BrokerError, project::Project, project_store::ProjectRow, storage::Database,
+    };
+    use rusqlite::params;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn encrypt_project(db: &mut Database, key: &VaultKey, project: &Project) -> ProjectRow {
+        let mut nonce = [0; 24];
+        getrandom::fill(&mut nonce).unwrap();
+        db.reserve_record(key.key_id(), &nonce).unwrap();
+        let revision = project.revision().parse().unwrap();
+        let mut ciphertext = project.encode().unwrap();
+        key.record(true, project.id(), revision, &nonce, &mut ciphertext)
+            .unwrap();
+        ProjectRow {
+            id: *project.id(),
+            key_id: *key.key_id(),
+            nonce,
+            revision,
+            ciphertext: ciphertext.to_vec(),
+        }
+    }
+
+    fn insert(db: &mut Database, key: &VaultKey, scope: SecretScope, value: &str) {
+        let record = SealedSecret::seal(
+            key,
+            scope,
+            SecretMetadata::new("SERVICE_TOKEN".into(), String::new(), vec![]).unwrap(),
+            SecretValue::new(value.into(), false).unwrap(),
+            |id, nonce| {
+                db.reserve_record(id, nonce)
+                    .map_err(|_| SecretError::ReservationFailed)
+            },
+        )
+        .unwrap();
+        let tx = db.connection.transaction().unwrap();
+        tx.execute(
+            "INSERT INTO secrets VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+            params![
+                scope.secret,
+                scope.project,
+                scope.environment,
+                scope.revision,
+                key.key_id(),
+                record.metadata.envelope,
+                record.metadata.nonce,
+                record.metadata.ciphertext,
+                record.value.envelope,
+                record.value.nonce,
+                record.value.ciphertext
+            ],
+        )
+        .unwrap();
+        tx.execute("INSERT INTO audit_events(occurred_at_ms,operation,result,project_id,environment_id,secret_id) VALUES (1,9,1,?1,?2,?3)",
+            params![scope.project,scope.environment,scope.secret]).unwrap();
+        tx.commit().unwrap();
+    }
+
+    fn count(db: &Database) -> i64 {
+        db.connection
+            .query_row("SELECT count(*) FROM secrets", [], |row| row.get(0))
+            .unwrap()
+    }
+
+    #[test]
+    fn ciphertext_reopens_and_parent_deletion_is_atomic_with_audit() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let mut db = Database::open(directory.path()).unwrap();
+        let key = VaultKey::generate_for_test();
+        let mut project = Project::create("Example".into(), workspace.path()).unwrap();
+        let row = encrypt_project(&mut db, &key, &project);
+        db.save_project(&row, None, 4, None).unwrap();
+        let first =
+            SecretScope::new(*project.id(), *project.environments()[0].id(), [1; 16], 1).unwrap();
+        let second =
+            SecretScope::new(*project.id(), *project.environments()[1].id(), [2; 16], 1).unwrap();
+        let value = super::tests::generated();
+        insert(&mut db, &key, first, &value);
+        insert(&mut db, &key, second, &value);
+        assert!(count(&db) == 2);
+        {
+            let tx = db.connection.transaction().unwrap();
+            assert!(
+                tx.execute_batch(include_str!("../migrations/0003_secrets.down.sql"))
+                    .is_err()
+            );
+        }
+        drop(db);
+        let mut db = Database::open(directory.path()).unwrap();
+        let record = db.connection.query_row(
+            "SELECT metadata_id,metadata_nonce,metadata_ciphertext,value_id,value_nonce,value_ciphertext FROM secrets WHERE id=?1",
+            [first.secret],
+            |row| Ok(SealedSecret {
+                metadata: Field { envelope: row.get(0)?, nonce: row.get(1)?, ciphertext: row.get(2)? },
+                value: Field { envelope: row.get(3)?, nonce: row.get(4)?, ciphertext: row.get(5)? },
+            }),
+        ).unwrap();
+        assert!(record.open_value(&key, first).unwrap().expose() == value.as_str());
+        assert!(record.open_metadata(&key, first).unwrap().name() == "SERVICE_TOKEN");
+        for name in ["vault.sqlite3", "vault.sqlite3-wal"] {
+            let path = directory.path().join(name);
+            if path.exists() {
+                let bytes = std::fs::read(path).unwrap();
+                assert!(
+                    !bytes
+                        .windows(value.len())
+                        .any(|part| part == value.as_bytes())
+                );
+                assert!(!bytes.windows(13).any(|part| part == b"SERVICE_TOKEN"));
+            }
+        }
+        db.connection.execute_batch("CREATE TRIGGER reject_audit BEFORE INSERT ON audit_events BEGIN SELECT RAISE(ABORT,'audit unavailable'); END").unwrap();
+        assert!(matches!(
+            db.delete_project(project.id(), 1),
+            Err(BrokerError::AuditUnavailable)
+        ));
+        assert!(count(&db) == 2);
+        let kind = project.environments()[0].kind();
+        project.remove_environment(kind, "1").unwrap();
+        // Nonce reservations themselves still succeed while audit insertion is faulted.
+        let row = encrypt_project(&mut db, &key, &project);
+        assert!(matches!(
+            db.save_project(&row, Some(1), 8, Some(first.environment)),
+            Err(BrokerError::AuditUnavailable)
+        ));
+        assert!(count(&db) == 2);
+        assert!(db.project_rows(None, 20).unwrap()[0].revision == 1);
+        db.connection
+            .execute_batch("DROP TRIGGER reject_audit")
+            .unwrap();
+        assert!(db.delete_project(project.id(), 2).is_err());
+        assert!(count(&db) == 2);
+        db.save_project(&row, Some(1), 8, Some(first.environment))
+            .unwrap();
+        assert!(count(&db) == 1);
+        let remaining: [u8; 16] = db
+            .connection
+            .query_row("SELECT id FROM secrets", [], |row| row.get(0))
+            .unwrap();
+        assert!(remaining == second.secret);
+        db.delete_project(project.id(), 2).unwrap();
+        assert!(count(&db) == 0);
+        assert!(workspace.path().is_dir());
+        let audit: i64 = db
+            .connection
+            .query_row(
+                "SELECT count(*) FROM audit_events WHERE secret_id IS NOT NULL",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(audit == 2);
+        let nonces: i64 = db
+            .connection
+            .query_row("SELECT count(*) FROM nonce_uses", [], |row| row.get(0))
+            .unwrap();
+        assert!(nonces == 6);
+        {
+            let tx = db.connection.transaction().unwrap();
+            assert!(
+                tx.execute_batch(include_str!("../migrations/0003_secrets.down.sql"))
+                    .is_err(),
+                "secret history must prevent downgrade"
+            );
+        }
+        drop(db);
+        assert!(Database::open(directory.path()).is_ok());
     }
 }

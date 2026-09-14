@@ -75,6 +75,13 @@ impl Database {
         if changed != 1 {
             return Err(BrokerError::RevisionConflict);
         }
+        if operation == 8 {
+            let environment_id = environment_id.ok_or(BrokerError::InvalidProject)?;
+            tx.execute(
+                "DELETE FROM secrets WHERE project_id=?1 AND environment_id=?2",
+                params![row.id, environment_id],
+            )?;
+        }
         tx.execute("INSERT INTO audit_events(occurred_at_ms,operation,result,project_id,environment_id) VALUES (?1,?2,1,?3,?4)",
             params![now_ms(), operation, row.id, environment_id])
             .map_err(|_| BrokerError::AuditUnavailable)?;
@@ -272,11 +279,68 @@ mod tests {
                     .connection
                     .pragma_query_value(None, "user_version", |r| r.get(0))
                     .unwrap();
-                assert_eq!(version, 2);
+                assert_eq!(version, 3);
                 let count: i64 = db.connection.query_row("SELECT count(*) FROM audit_events WHERE occurred_at_ms=1 AND operation=2 AND result=2 AND project_id IS NULL", [], |r| r.get(0)).unwrap();
                 assert_eq!(count, 1);
                 let tx = db.connection.transaction().unwrap();
+                tx.execute_batch(include_str!("../migrations/0003_secrets.down.sql"))
+                    .unwrap();
                 tx.execute_batch(include_str!("../migrations/0002_projects.down.sql"))
+                    .unwrap();
+                tx.commit().unwrap();
+                drop(db);
+                assert!(Database::open(dir.path()).is_ok());
+            }
+        }
+    }
+    #[test]
+    fn v2_migration_preserves_scoped_audit_and_refuses_unknown_schema() {
+        for corrupted in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+            let path = dir.path().join("vault.sqlite3");
+            drop(crate::storage::private_file(&path).unwrap());
+            let connection = rusqlite::Connection::open(&path).unwrap();
+            connection
+                .execute_batch(include_str!("../migrations/0001_initial.up.sql"))
+                .unwrap();
+            connection
+                .execute_batch(include_str!("../migrations/0002_projects.up.sql"))
+                .unwrap();
+            connection.execute(
+                "INSERT INTO audit_events(sequence,occurred_at_ms,operation,result,project_id,environment_id) VALUES (7,123,8,1,?1,?2)",
+                params![[1u8;16], [2u8;16]],
+            ).unwrap();
+            if corrupted {
+                connection
+                    .execute_batch("CREATE TABLE unexpected(value TEXT)")
+                    .unwrap();
+            }
+            drop(connection);
+            if corrupted {
+                assert!(Database::open(dir.path()).is_err());
+                let connection = rusqlite::Connection::open(&path).unwrap();
+                let version: i64 = connection
+                    .pragma_query_value(None, "user_version", |row| row.get(0))
+                    .unwrap();
+                assert!(version == 2);
+            } else {
+                let mut db = Database::open(dir.path()).unwrap();
+                let preserved: i64 = db.connection.query_row(
+                    "SELECT count(*) FROM audit_events WHERE sequence=7 AND occurred_at_ms=123 AND operation=8 AND result=1 AND project_id=?1 AND environment_id=?2 AND secret_id IS NULL",
+                    params![[1u8;16], [2u8;16]], |row| row.get(0),
+                ).unwrap();
+                assert!(preserved == 1);
+                db.audit(124, 3, 1).unwrap();
+                let next: i64 = db
+                    .connection
+                    .query_row("SELECT max(sequence) FROM audit_events", [], |row| {
+                        row.get(0)
+                    })
+                    .unwrap();
+                assert!(next == 8);
+                let tx = db.connection.transaction().unwrap();
+                tx.execute_batch(include_str!("../migrations/0003_secrets.down.sql"))
                     .unwrap();
                 tx.commit().unwrap();
                 drop(db);

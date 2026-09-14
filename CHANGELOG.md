@@ -6,6 +6,8 @@ Notable changes to Latch are recorded here. No public release has been published
 
 ### Added
 
+- Secret ciphertext schema migration and transactional cleanup on project/environment deletion. Secret entry and disclosure are still disabled.
+
 - Rust secret-input validation and separate authenticated metadata/value records, with tamper and nonce-reservation tests. Desktop secret management is not enabled yet.
 
 - Linux project creation through a native directory picker, encrypted project metadata, renaming, and confirmed project/environment deletion and environment recreation.

@@ -96,13 +96,16 @@ impl Database {
             tx.commit()?;
             file.sync_all()?;
             File::open(directory)?.sync_all()?;
-        } else if !(1..=2).contains(&version) || app != 1279349827 {
+        } else if !(1..=3).contains(&version) || app != 1279349827 {
             return Err(BrokerError::StorageUnavailable);
         }
         let expected = Connection::open_in_memory()?;
         expected.execute_batch(include_str!("../migrations/0001_initial.up.sql"))?;
-        if version == 2 {
+        if version >= 2 {
             expected.execute_batch(include_str!("../migrations/0002_projects.up.sql"))?;
+        }
+        if version == 3 {
+            expected.execute_batch(include_str!("../migrations/0003_secrets.up.sql"))?;
         }
         if schema(&connection)? != schema(&expected)? {
             return Err(BrokerError::StorageUnavailable);
@@ -120,6 +123,17 @@ impl Database {
             tx.execute_batch(include_str!("../migrations/0002_projects.up.sql"))?;
             tx.commit()?;
             expected.execute_batch(include_str!("../migrations/0002_projects.up.sql"))?;
+            if schema(&connection)? != schema(&expected)? {
+                return Err(BrokerError::StorageUnavailable);
+            }
+            file.sync_all()?;
+            File::open(directory)?.sync_all()?;
+        }
+        if version < 3 {
+            let tx = connection.transaction()?;
+            tx.execute_batch(include_str!("../migrations/0003_secrets.up.sql"))?;
+            tx.commit()?;
+            expected.execute_batch(include_str!("../migrations/0003_secrets.up.sql"))?;
             if schema(&connection)? != schema(&expected)? {
                 return Err(BrokerError::StorageUnavailable);
             }
@@ -336,9 +350,14 @@ mod tests {
         )
         .expect("private directory failed");
         let mut db = Database::open(dir.path()).expect("open failed");
-        db.connection
-            .execute_batch("DROP TABLE projects;")
-            .expect("project table cleanup failed");
+        {
+            let tx = db.connection.transaction().expect("transaction failed");
+            tx.execute_batch(include_str!("../migrations/0003_secrets.down.sql"))
+                .expect("secret schema reversal failed");
+            tx.execute_batch(include_str!("../migrations/0002_projects.down.sql"))
+                .expect("project schema reversal failed");
+            tx.commit().expect("schema reversal commit failed");
+        }
         db.connection
             .execute_batch(include_str!("../migrations/0001_initial.down.sql"))
             .expect("down failed");
