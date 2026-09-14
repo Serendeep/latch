@@ -29,6 +29,7 @@ struct PendingRequest {
 }
 
 struct RequestState {
+    #[cfg(target_os = "linux")]
     intake: Mutex<()>,
     pending: Mutex<Option<PendingRequest>>,
 }
@@ -1000,6 +1001,7 @@ fn main() {
                 .map_err(|_| std::io::Error::other("Application data is unavailable."))?;
             let broker = Arc::new(Broker::start(directory.join("vault")));
             let requests = Arc::new(RequestState {
+                #[cfg(target_os = "linux")]
                 intake: Mutex::new(()),
                 pending: Mutex::new(None),
             });
