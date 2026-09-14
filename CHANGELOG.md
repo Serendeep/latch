@@ -6,6 +6,8 @@ Notable changes to Latch are recorded here. No public release has been published
 
 ### Added
 
+- Rust secret-input validation and separate authenticated metadata/value records, with tamper and nonce-reservation tests. Desktop secret management is not enabled yet.
+
 - Linux project creation through a native directory picker, encrypted project metadata, renaming, and confirmed project/environment deletion and environment recreation.
 - Atomic metadata/audit writes, schema migration, bounded project pages, single-use directory selections, and stale-session rejection.
 - Linux empty-vault creation, passphrase unlocking, and locking through narrowly scoped desktop commands.

@@ -1,4 +1,5 @@
 //! Ciphertext persistence boundary; OS storage and broker integration are separate.
+use latch_core::secret::{SealedSecret, SecretMetadata, SecretScope, SecretValue};
 use latch_core::vault::{DeviceKey, Passphrase, PreparedVault, VaultSession, WrappedVaultKey};
 use std::{
     fs::{self, OpenOptions},
@@ -52,11 +53,52 @@ fn persisted_ciphertext_reopens_with_both_factors() {
     let key = reopened
         .unlock(
             Passphrase::from_input(password.to_string()).expect("test passphrase invalid"),
-            DeviceKey::from_store(device).expect("test material invalid"),
+            DeviceKey::from_store(device.clone()).expect("test material invalid"),
         )
         .expect("unlock failed");
+    let scope = SecretScope::new([1; 16], [2; 16], [3; 16], 1).expect("test scope invalid");
+    getrandom::fill(&mut *random).expect("test RNG unavailable");
+    let value = Zeroizing::new(
+        random
+            .iter()
+            .map(|b| char::from(b'a' + b % 26))
+            .collect::<String>(),
+    );
+    let mut reservations = std::collections::HashSet::new();
+    let secret = SealedSecret::seal(
+        &key,
+        scope,
+        SecretMetadata::new("SERVICE_TOKEN".into(), String::new(), vec![])
+            .expect("test metadata invalid"),
+        SecretValue::new(value.to_string(), false).expect("test value invalid"),
+        |id, nonce| {
+            assert!(reservations.insert((*id, *nonce)), "nonce reused");
+            Ok(())
+        },
+    )
+    .expect("secret encryption failed");
     assert!(session.complete_unlock(ticket, key));
     assert!(session.is_unlocked());
     session.lock();
     assert!(!session.is_unlocked());
+    let reopened_key = reopened
+        .unlock(
+            Passphrase::from_input(password.to_string()).expect("test passphrase invalid"),
+            DeviceKey::from_store(device).expect("test material invalid"),
+        )
+        .expect("second unlock failed");
+    assert!(
+        secret
+            .open_metadata(&reopened_key, scope)
+            .expect("metadata authentication failed")
+            .name()
+            == "SERVICE_TOKEN"
+    );
+    assert!(
+        secret
+            .open_value(&reopened_key, scope)
+            .expect("value authentication failed")
+            .expose()
+            == value.as_str()
+    );
 }

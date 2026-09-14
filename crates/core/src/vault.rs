@@ -71,14 +71,14 @@ impl DeviceKey {
 }
 
 /// A decrypted vault key. It has no debug, clone, or serialization implementation.
-pub struct VaultKey(
-    Zeroizing<Vec<u8>>,
-    // Record storage currently consumes these authenticated IDs only on Linux.
-    #[cfg_attr(not(target_os = "linux"), expect(dead_code))] [u8; 16],
-    #[cfg_attr(not(target_os = "linux"), expect(dead_code))] [u8; 16],
-);
+pub struct VaultKey(Zeroizing<Vec<u8>>, [u8; 16], [u8; 16]);
 
-#[cfg(target_os = "linux")]
+pub(crate) struct RecordContext {
+    pub purpose: u8,
+    pub ids: [[u8; 16]; 4],
+    pub revision: i64,
+}
+
 impl VaultKey {
     #[cfg(test)]
     pub(crate) fn generate_for_test() -> Self {
@@ -89,6 +89,7 @@ impl VaultKey {
         &self.2
     }
 
+    #[cfg(target_os = "linux")]
     pub(crate) fn record(
         &self,
         encrypt: bool,
@@ -97,15 +98,38 @@ impl VaultKey {
         nonce: &[u8; 24],
         buffer: &mut Zeroizing<Vec<u8>>,
     ) -> Result<(), VaultError> {
+        self.crypt_record(
+            encrypt,
+            RecordContext {
+                purpose: 1,
+                ids: [*id, *id, [0; 16], *id],
+                revision,
+            },
+            nonce,
+            buffer,
+        )
+    }
+
+    pub(crate) fn crypt_record(
+        &self,
+        encrypt: bool,
+        context: RecordContext,
+        nonce: &[u8; 24],
+        buffer: &mut Zeroizing<Vec<u8>>,
+    ) -> Result<(), VaultError> {
+        let RecordContext {
+            purpose,
+            ids,
+            revision,
+        } = context;
         if revision < 1 || buffer.len() > 65536 || (!encrypt && buffer.len() < 16) {
             return Err(VaultError::InvalidRecord);
         }
-        // Fixed encoding: format 1, project metadata purpose 1, then six IDs.
-        // The project is its own envelope/object; unused environment is zero.
+        // Fixed format/purpose and six IDs; existing project encoding stays unchanged.
         let mut aad = Vec::with_capacity(118);
         aad.extend_from_slice(b"latch-record");
-        aad.extend_from_slice(&[1, 1]);
-        for field in [&self.1, &self.2, id, id, &[0; 16], id] {
+        aad.extend_from_slice(&[1, purpose]);
+        for field in [&self.1, &self.2, &ids[0], &ids[1], &ids[2], &ids[3]] {
             aad.extend_from_slice(field);
         }
         aad.extend_from_slice(&(revision as u64).to_be_bytes());
@@ -381,6 +405,38 @@ impl VaultSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn record_authenticates_vault_and_key_ids_with_unchanged_key_bytes() {
+        let mut key = VaultKey::generate_for_test();
+        let context = || RecordContext {
+            purpose: 4,
+            ids: [[1; 16], [2; 16], [3; 16], [4; 16]],
+            revision: 1,
+        };
+        let mut nonce = [0; 24];
+        getrandom::fill(&mut nonce).expect("test RNG failed");
+        let mut bytes = Zeroizing::new(vec![0; 32]);
+        getrandom::fill(&mut bytes).expect("test RNG failed");
+        key.crypt_record(true, context(), &nonce, &mut bytes)
+            .unwrap();
+        key.1[0] ^= 1;
+        assert!(
+            key.crypt_record(false, context(), &nonce, &mut bytes.clone())
+                .is_err()
+        );
+        key.1[0] ^= 1;
+        key.2[0] ^= 1;
+        assert!(
+            key.crypt_record(false, context(), &nonce, &mut bytes.clone())
+                .is_err()
+        );
+        key.2[0] ^= 1;
+        assert!(
+            key.crypt_record(false, context(), &nonce, &mut bytes)
+                .is_ok()
+        );
+    }
 
     fn passphrase() -> Zeroizing<String> {
         let mut bytes = Zeroizing::new([0; 24]);

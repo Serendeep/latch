@@ -49,6 +49,15 @@ impl FromStr for Environment {
     }
 }
 
+pub(crate) fn valid_variable_name(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    name.len() <= 128
+        && bytes
+            .next()
+            .is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
+        && bytes.all(|b| b.is_ascii_alphanumeric() || b == b'_')
+}
+
 /// A proposed command, never an authorization. There is deliberately no value field.
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -100,14 +109,7 @@ impl RunRequest {
         }
         let mut seen = HashSet::new();
         for name in &self.names {
-            let mut bytes = name.bytes();
-            if name.len() > 128
-                || !bytes
-                    .next()
-                    .is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
-                || !bytes.all(|b| b.is_ascii_alphanumeric() || b == b'_')
-                || !seen.insert(name.to_ascii_uppercase())
-            {
+            if !valid_variable_name(name) || !seen.insert(name.to_ascii_uppercase()) {
                 return Err(InvalidRequest);
             }
         }

@@ -7,6 +7,7 @@ pub mod project;
 #[cfg(target_os = "linux")]
 mod project_store;
 pub mod protocol;
+pub mod secret;
 #[cfg(target_os = "linux")]
 mod storage;
 pub mod vault;
