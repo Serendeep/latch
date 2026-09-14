@@ -1,6 +1,7 @@
 //! Shared request contracts and the desktop-owned local vault. No secret delivery yet.
 
 pub mod broker;
+pub mod import;
 #[cfg(target_os = "linux")]
 mod keystore;
 pub mod project;

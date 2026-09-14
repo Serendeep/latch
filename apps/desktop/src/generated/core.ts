@@ -74,3 +74,20 @@ tags: Array<string>,
  * Decimal revision for optimistic concurrency.
  */
 revision: string, };
+export type FileReview = {
+/**
+ * Single-use import token; absent for example comparison.
+ */
+token: string | null,
+/**
+ * Names that can be imported, or names missing from an example comparison.
+ */
+missing: Array<string>,
+/**
+ * Names already stored in the selected environment.
+ */
+present: Array<string>,
+/**
+ * Empty import values omitted from the candidate batch.
+ */
+empty: Array<string>, };

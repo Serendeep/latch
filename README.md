@@ -10,11 +10,11 @@ Latch is being built around a simple workflow: an agent requests named credentia
 
 ## Status
 
-**Early development. Linux vault, project management, scoped secret CRUD, reveal, and clipboard copy are implemented; command delivery is not available yet.**
+**Early development. Linux vault, project management, scoped secret CRUD, reveal, clipboard copy, and configuration import are implemented; command delivery is not available yet.**
 
 On Linux, you can create an empty encrypted vault, unlock it with a separate Latch passphrase, and lock it again. The first credential-store adapter requires GNOME Keyring’s unlocked, password-protected login collection. macOS and Windows vault operations remain unavailable pending native credential-store qualification.
 
-Vault keys stay in Rust. SQLite stores the authenticated wrapped key and separately encrypted secret metadata and values; the GNOME login keyring stores separate random device material. Unlocking requires both that material and the passphrase. The vault locks after five minutes, and explicit locking cancels outstanding operations. Audit records cover vault creation, unlock outcomes, locking, project/environment changes, secret changes, individual reveals, and copy access. Weekly archives are not implemented yet.
+Vault keys stay in Rust. SQLite stores the authenticated wrapped key and separately encrypted secret metadata and values; the GNOME login keyring stores separate random device material. Unlocking requires both that material and the passphrase. The vault locks after five minutes, and explicit locking cancels outstanding operations. Audit records cover vault creation, unlock outcomes, locking, project/environment changes, secret changes, individual reveals, copy access, imports, and example comparisons. Weekly archives are not implemented yet.
 
 The desktop follows system, light, or dark appearance. The CLI still validates requests and refuses to launch them. Claude Code and Codex integrations have not yet been tested.
 
@@ -78,6 +78,18 @@ Renaming preserves the directory binding. Removing an environment requires confi
 Select an environment, then add a variable name, optional description and tags, and its value. Names are unique within that environment without ASCII case distinctions. Lists decrypt and return metadata only; a value reaches the webview only after choosing **Reveal** for that one record, and is concealed again after 15 seconds or a scope change. Create, update, delete, and reveal each record metadata-only audit events.
 
 The value entry uses an uncontrolled password field and clears when submitted or dismissed. JavaScript and operating-system memory cannot be guaranteed to be wiped. **Copy** never returns the value to React and can clear it after 15, 30, or 60 seconds. Latch clears only when the clipboard still contains its latest copied value, so a later user copy is preserved. Platform history-exclusion hints are best effort; clipboard managers and same-user software can still read or retain copied values. This remains an early development build; use generated test credentials while evaluating it.
+
+### Import and compare configuration
+
+![Names-only import review in dark mode](docs/assets/latch-import-dark.png)
+
+Choose a project and environment, then **Import .env** and select a file in the native picker. Review the variable names before confirming. Latch imports new nonempty entries together, skips existing names and empty values, and records the operation in local audit history. The source file stays on disk. A review expires after five minutes or when the vault locks. Selecting a different file replaces the pending review.
+
+**Compare .env.example** shows missing and present names for that environment. It ignores example values and creates no secrets. Comparison results are a snapshot; compare again after changing the environment's secrets.
+
+Files must be UTF-8, at most 1 MiB, with at most 256 unique assignments. Import supports `NAME=value`, optional `export `, blank lines, comments, and literal single-line quoted values. An unquoted `#` starts a comment at the beginning of the value or after whitespace. Quotes can be followed by a comment. Interpolation, dollar signs, backticks, backslash escapes, and multiline values are rejected. Duplicate names reject the file without writes, including names differing only by ASCII case. Example comparison reads assignment names and ignores everything after `=`.
+
+Imported values stay in Rust. Pending reviews hold encrypted candidates, so changing the source file after review cannot change the imported values. Import does not erase plaintext source files or protect them from other local software.
 
 ### Interrupted first setup
 

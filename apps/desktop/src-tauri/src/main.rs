@@ -3,6 +3,7 @@
 use latch_core::{
     AppStatus,
     broker::{Broker, BrokerError, ProjectCommand, SecretCommand, SecretResult},
+    import::FileReview,
     project::{DirectorySelection, ProjectPage},
     protocol::Environment,
     secret::{RevealedSecret, SecretSummary},
@@ -399,6 +400,99 @@ async fn secret_operation(
 }
 
 #[tauri::command]
+async fn import_preview(
+    window: tauri::WebviewWindow,
+    broker: tauri::State<'_, Arc<Broker>>,
+    picker: tauri::State<'_, Arc<Mutex<()>>>,
+    project_id: String,
+    environment: String,
+    lock_epoch: String,
+    example: bool,
+) -> Result<Option<FileReview>, BrokerError> {
+    authorize(&window)?;
+    if project_id.len() != 32
+        || !project_id
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return Err(BrokerError::InvalidProject);
+    }
+    let environment = environment
+        .parse()
+        .map_err(|_| BrokerError::InvalidSecret)?;
+    let broker = Arc::clone(&broker);
+    let picker = Arc::clone(&picker);
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = picker.try_lock().map_err(|_| BrokerError::Busy)?;
+        let status = broker.status()?;
+        if status.lock_epoch != lock_epoch
+            || !matches!(status.vault, latch_core::VaultAvailability::Unlocked)
+        {
+            return Err(BrokerError::Cancelled);
+        }
+        let path = window
+            .dialog()
+            .file()
+            .set_parent(&window)
+            .set_title(if example {
+                "Choose .env.example to compare names"
+            } else {
+                "Choose .env to review import"
+            })
+            .blocking_pick_file();
+        let Some(path) = path else {
+            return Ok(None);
+        };
+        let path = path.into_path().map_err(|_| BrokerError::InvalidImport)?;
+        match broker.secrets(
+            SecretCommand::FilePreview {
+                project_id,
+                environment,
+                path,
+                example,
+            },
+            lock_epoch,
+        )? {
+            SecretResult::Review(review) => Ok(Some(review)),
+            _ => Err(BrokerError::InvalidState),
+        }
+    })
+    .await
+    .map_err(|_| BrokerError::StorageUnavailable)?
+}
+
+#[tauri::command]
+async fn import_commit(
+    window: tauri::WebviewWindow,
+    broker: tauri::State<'_, Arc<Broker>>,
+    project_id: String,
+    environment: String,
+    lock_epoch: String,
+    token: String,
+    confirmed: bool,
+) -> Result<Vec<SecretSummary>, BrokerError> {
+    authorize(&window)?;
+    let environment = environment
+        .parse()
+        .map_err(|_| BrokerError::InvalidSecret)?;
+    match secret_operation(
+        Arc::clone(&broker),
+        SecretCommand::ImportCommit {
+            project_id,
+            environment,
+            token,
+            confirmed,
+        },
+        lock_epoch,
+    )
+    .await?
+    {
+        SecretResult::List(items) => Ok(items),
+        _ => Err(BrokerError::InvalidState),
+    }
+}
+
+#[tauri::command]
 async fn secrets_list(
     window: tauri::WebviewWindow,
     broker: tauri::State<'_, Arc<Broker>>,
@@ -421,7 +515,7 @@ async fn secrets_list(
     .await?
     {
         SecretResult::List(items) => Ok(items),
-        SecretResult::Revealed(_) => Err(BrokerError::InvalidState),
+        _ => Err(BrokerError::InvalidState),
     }
 }
 
@@ -459,7 +553,7 @@ async fn secret_create(
     .await?
     {
         SecretResult::List(items) => Ok(items),
-        SecretResult::Revealed(_) => Err(BrokerError::InvalidState),
+        _ => Err(BrokerError::InvalidState),
     }
 }
 
@@ -501,7 +595,7 @@ async fn secret_update(
     .await?
     {
         SecretResult::List(items) => Ok(items),
-        SecretResult::Revealed(_) => Err(BrokerError::InvalidState),
+        _ => Err(BrokerError::InvalidState),
     }
 }
 
@@ -537,7 +631,7 @@ async fn secret_delete(
     .await?
     {
         SecretResult::List(items) => Ok(items),
-        SecretResult::Revealed(_) => Err(BrokerError::InvalidState),
+        _ => Err(BrokerError::InvalidState),
     }
 }
 
@@ -573,7 +667,7 @@ async fn secret_reveal(
     .await?
     {
         SecretResult::Revealed(value) => Ok(value),
-        SecretResult::List(_) => Err(BrokerError::InvalidState),
+        _ => Err(BrokerError::InvalidState),
     }
 }
 
@@ -608,7 +702,7 @@ fn secret_copy(
         lock_epoch,
     )? {
         SecretResult::Revealed(value) => value,
-        SecretResult::List(_) => return Err(BrokerError::InvalidState),
+        _ => return Err(BrokerError::InvalidState),
     };
     let generation = clipboard.copy(revealed.value)?;
     schedule_clipboard_clear(
@@ -658,6 +752,8 @@ fn main() {
             environment_create,
             environment_delete,
             secrets_list,
+            import_preview,
+            import_commit,
             secret_create,
             secret_update,
             secret_delete,

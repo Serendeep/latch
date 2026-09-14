@@ -6,6 +6,9 @@ Notable changes to Latch are recorded here. No public release has been published
 
 ### Added
 
+- Native-file `.env` import with names-only review, encrypted five-minute candidates, atomic creation/audit writes, and conflict/empty-value skipping.
+- `.env.example` missing/present name comparison without importing example values.
+
 - Rust-owned one-record clipboard copy with bounded expiry, ownership checks, platform history-exclusion hints, and metadata-only audit operation 13.
 - Linux secret create, metadata-only listing, metadata/value updates, confirmed deletion, and deliberate one-record reveal through narrow Tauri commands.
 - Separate authenticated metadata/value encryption, ciphertext-only SQLite records, optimistic revisions, scoped uniqueness and capacity checks, and atomic metadata-only audit events.

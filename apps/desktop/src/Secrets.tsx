@@ -1,21 +1,29 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import {
   copySecret,
+  previewImport,
+  commitImport,
   createSecret,
   deleteSecret,
   listSecrets,
   revealSecret,
   updateSecret,
 } from "./api";
-import type { Environment, SecretSummary } from "./generated/core";
+import type { Environment, FileReview, SecretSummary } from "./generated/core";
 
 type Props = {
   epoch: string;
   projectId: string;
+  projectName?: string;
   environment: Environment;
 };
 
-export default function Secrets({ epoch, projectId, environment }: Props) {
+export default function Secrets({
+  epoch,
+  projectId,
+  projectName,
+  environment,
+}: Props) {
   const [items, setItems] = useState<SecretSummary[] | null>(null);
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState("");
@@ -28,6 +36,11 @@ export default function Secrets({ epoch, projectId, environment }: Props) {
     revision: string;
     value: string;
   } | null>(null);
+  const [review, setReview] = useState<{
+    data: FileReview;
+    example: boolean;
+  } | null>(null);
+  const reviewDialog = useRef<HTMLDialogElement>(null);
   const editor = useRef<HTMLDialogElement>(null);
   const confirmation = useRef<HTMLDialogElement>(null);
   const active = useRef(true);
@@ -64,6 +77,61 @@ export default function Secrets({ epoch, projectId, environment }: Props) {
     if (deleting) confirmation.current?.showModal();
     else confirmation.current?.close();
   }, [deleting]);
+
+  useEffect(() => {
+    if (review) reviewDialog.current?.showModal();
+    else reviewDialog.current?.close();
+  }, [review]);
+
+  async function chooseFile(example: boolean) {
+    if (pending) return;
+    setPending(true);
+    setMessage("");
+    setNotice("");
+    setRevealed(null);
+    try {
+      const data = await previewImport(epoch, projectId, environment, example);
+      if (active.current && data) setReview({ data, example });
+    } catch (error: unknown) {
+      if (active.current) setMessage(secretError(error));
+    } finally {
+      if (active.current) setPending(false);
+    }
+  }
+
+  async function finishImport(confirmed: boolean) {
+    if (pending || !review) return;
+    const token = review.data.token;
+    if (!token) {
+      setReview(null);
+      return;
+    }
+    setPending(true);
+    setMessage("");
+    try {
+      const result = await commitImport(
+        epoch,
+        projectId,
+        environment,
+        token,
+        confirmed,
+      );
+      if (active.current) {
+        setItems(result);
+        if (confirmed)
+          setNotice(
+            `${review.data.missing.length} ${review.data.missing.length === 1 ? "secret" : "secrets"} imported into ${environment}.`,
+          );
+      }
+    } catch (error: unknown) {
+      if (active.current) setMessage(secretError(error));
+    } finally {
+      if (active.current) {
+        setReview(null);
+        setPending(false);
+      }
+    }
+  }
 
   async function run(operation: () => Promise<SecretSummary[]>) {
     if (pending) return;
@@ -120,6 +188,23 @@ export default function Secrets({ epoch, projectId, environment }: Props) {
       <p className="supporting-text scope-copy">
         Only this environment. Missing names never fall back to another scope.
       </p>
+      <div className="file-actions">
+        <button
+          type="button"
+          disabled={pending || !items}
+          onClick={() => void chooseFile(false)}
+        >
+          Import .env
+        </button>
+        <button
+          type="button"
+          disabled={pending || !items}
+          onClick={() => void chooseFile(true)}
+        >
+          Compare .env.example
+        </button>
+        {pending ? <output>Working…</output> : null}
+      </div>
       {message ? (
         <p role="alert" className="inline-alert">
           {message}
@@ -270,6 +355,90 @@ export default function Secrets({ epoch, projectId, environment }: Props) {
           </table>
         </div>
       )}
+      <dialog
+        ref={reviewDialog}
+        aria-labelledby="file-review-heading"
+        onCancel={(event) => {
+          event.preventDefault();
+          void finishImport(false);
+        }}
+      >
+        <span className="dialog-kicker">
+          {projectName ?? projectId} / {environment}
+        </span>
+        <h2 id="file-review-heading">
+          {review?.example ? "Expected variables" : "Review import"}
+        </h2>
+        <p>
+          {review?.example
+            ? "Only variable names were compared. Example values are ignored."
+            : "Add the new nonempty entries below to this environment. Existing secrets and the source file are preserved. This review expires in five minutes."}
+        </p>
+        {review ? (
+          <div className="file-review-list">
+            <h3>
+              {review.example ? "Missing" : "Ready to import"} ·{" "}
+              {review.data.missing.length}
+            </h3>
+            {review.data.missing.length ? (
+              <ul>
+                {review.data.missing.map((name) => (
+                  <li key={name}>
+                    <code>{name}</code>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p>None</p>
+            )}
+            <h3>Already present · {review.data.present.length}</h3>
+            {review.data.present.length ? (
+              <ul>
+                {review.data.present.map((name) => (
+                  <li key={name}>
+                    <code>{name}</code>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p>None</p>
+            )}
+            {review.data.empty.length ? (
+              <>
+                <h3>Skipped empty values · {review.data.empty.length}</h3>
+                <ul>
+                  {review.data.empty.map((name) => (
+                    <li key={name}>
+                      <code>{name}</code>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            ) : null}
+          </div>
+        ) : null}
+        <div className="dialog-actions">
+          <button
+            type="button"
+            autoFocus
+            disabled={pending}
+            onClick={() => void finishImport(false)}
+          >
+            {review?.data.token ? "Cancel" : "Close"}
+          </button>
+          {review?.data.token ? (
+            <button
+              className="primary-action"
+              type="button"
+              disabled={pending}
+              onClick={() => void finishImport(true)}
+            >
+              Import {review.data.missing.length}{" "}
+              {review.data.missing.length === 1 ? "secret" : "secrets"}
+            </button>
+          ) : null}
+        </div>
+      </dialog>
       <SecretEditor
         dialogRef={editor}
         secret={editing}
@@ -447,6 +616,10 @@ function SecretEditor({
 
 function secretError(error: unknown): string {
   switch (error) {
+    case "invalid_import":
+      return "Choose a UTF-8 file up to 1 MiB with at most 256 unique NAME=value entries. Import supports literal single-line values; expansion, escapes, and multiline values are unsupported.";
+    case "invalid_review":
+      return "This import review expired or is no longer available. Select the file again.";
     case "invalid_secret":
       return "Check the name, description, tags, and value limits.";
     case "secret_exists":

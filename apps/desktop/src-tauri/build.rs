@@ -14,6 +14,8 @@ fn main() {
             "environment_create",
             "environment_delete",
             "secrets_list",
+            "import_preview",
+            "import_commit",
             "secret_create",
             "secret_update",
             "secret_delete",

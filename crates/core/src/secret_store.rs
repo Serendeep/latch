@@ -99,76 +99,35 @@ impl Database {
     ) -> Result<(), BrokerError> {
         self.audit_capacity()?;
         let tx = self.connection.transaction()?;
-        let count: i64 = tx.query_row(
-            "SELECT count(*) FROM secrets WHERE project_id=?1 AND environment_id=?2",
-            params![row.project_id, row.environment_id],
-            |record| record.get(0),
-        )?;
-        if previous.is_none() && count >= 256 {
-            return Err(BrokerError::SecretLimit);
-        }
-        let collision: i64 = tx.query_row(
-            "SELECT count(*) FROM secrets WHERE id<>?1 AND (metadata_id IN (?2,?3) OR value_id IN (?2,?3))",
-            params![row.id, row.sealed.metadata.envelope, row.sealed.value.envelope],
-            |record| record.get(0),
-        )?;
-        if collision != 0 {
-            return Err(BrokerError::StorageUnavailable);
-        }
-        let changed = if let Some(previous) = previous {
-            tx.execute(
-                "UPDATE secrets SET revision=?4,key_id=?5,metadata_id=?6,metadata_nonce=?7,\
-                 metadata_ciphertext=?8,value_id=?9,value_nonce=?10,value_ciphertext=?11 \
-                 WHERE id=?1 AND project_id=?2 AND environment_id=?3 AND revision=?12",
-                params![
-                    row.id,
-                    row.project_id,
-                    row.environment_id,
-                    row.revision,
-                    row.key_id,
-                    row.sealed.metadata.envelope,
-                    row.sealed.metadata.nonce,
-                    row.sealed.metadata.ciphertext,
-                    row.sealed.value.envelope,
-                    row.sealed.value.nonce,
-                    row.sealed.value.ciphertext,
-                    previous,
-                ],
-            )?
-        } else {
-            tx.execute(
-                "INSERT INTO secrets VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
-                params![
-                    row.id,
-                    row.project_id,
-                    row.environment_id,
-                    row.revision,
-                    row.key_id,
-                    row.sealed.metadata.envelope,
-                    row.sealed.metadata.nonce,
-                    row.sealed.metadata.ciphertext,
-                    row.sealed.value.envelope,
-                    row.sealed.value.nonce,
-                    row.sealed.value.ciphertext,
-                ],
-            )?
-        };
-        if changed != 1 {
-            return Err(BrokerError::RevisionConflict);
-        }
-        tx.execute(
-            "INSERT INTO audit_events(occurred_at_ms,operation,result,project_id,environment_id,secret_id) \
-             VALUES (?1,?2,1,?3,?4,?5)",
-            params![
-                now_ms(),
-                if previous.is_some() { 10 } else { 9 },
-                row.project_id,
-                row.environment_id,
-                row.id,
-            ],
-        )
-        .map_err(|_| BrokerError::AuditUnavailable)?;
+        write_secret(&tx, row, previous)?;
         tx.commit()?;
+        Ok(())
+    }
+
+    pub(crate) fn import_secrets(&mut self, rows: &[SecretRow]) -> Result<(), BrokerError> {
+        if rows.is_empty() || rows.len() > 256 {
+            return Err(BrokerError::InvalidImport);
+        }
+        let tx = self.connection.transaction()?;
+        let count: i64 = tx.query_row("SELECT count(*) FROM audit_events", [], |row| row.get(0))?;
+        if count + rows.len() as i64 + 1 > 32768 {
+            return Err(BrokerError::AuditUnavailable);
+        }
+        for row in rows {
+            write_secret(&tx, row, None)?;
+        }
+        tx.execute("INSERT INTO audit_events(occurred_at_ms,operation,result,project_id,environment_id) VALUES (?1,14,1,?2,?3)", params![now_ms(), rows[0].project_id, rows[0].environment_id]).map_err(|_| BrokerError::AuditUnavailable)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub(crate) fn audit_comparison(
+        &self,
+        project: &[u8; 16],
+        environment: &[u8; 16],
+    ) -> Result<(), BrokerError> {
+        self.audit_capacity()?;
+        self.connection.execute("INSERT INTO audit_events(occurred_at_ms,operation,result,project_id,environment_id) VALUES (?1,15,1,?2,?3)", params![now_ms(), project, environment]).map_err(|_| BrokerError::AuditUnavailable)?;
         Ok(())
     }
 
@@ -218,4 +177,81 @@ impl Database {
             .map_err(|_| BrokerError::AuditUnavailable)?;
         Ok(())
     }
+}
+
+fn write_secret(
+    tx: &rusqlite::Transaction<'_>,
+    row: &SecretRow,
+    previous: Option<i64>,
+) -> Result<(), BrokerError> {
+    let count: i64 = tx.query_row(
+        "SELECT count(*) FROM secrets WHERE project_id=?1 AND environment_id=?2",
+        params![row.project_id, row.environment_id],
+        |record| record.get(0),
+    )?;
+    if previous.is_none() && count >= 256 {
+        return Err(BrokerError::SecretLimit);
+    }
+    let collision: i64 = tx.query_row(
+            "SELECT count(*) FROM secrets WHERE id<>?1 AND (metadata_id IN (?2,?3) OR value_id IN (?2,?3))",
+            params![row.id, row.sealed.metadata.envelope, row.sealed.value.envelope],
+            |record| record.get(0),
+        )?;
+    if collision != 0 {
+        return Err(BrokerError::StorageUnavailable);
+    }
+    let changed = if let Some(previous) = previous {
+        tx.execute(
+            "UPDATE secrets SET revision=?4,key_id=?5,metadata_id=?6,metadata_nonce=?7,\
+                 metadata_ciphertext=?8,value_id=?9,value_nonce=?10,value_ciphertext=?11 \
+                 WHERE id=?1 AND project_id=?2 AND environment_id=?3 AND revision=?12",
+            params![
+                row.id,
+                row.project_id,
+                row.environment_id,
+                row.revision,
+                row.key_id,
+                row.sealed.metadata.envelope,
+                row.sealed.metadata.nonce,
+                row.sealed.metadata.ciphertext,
+                row.sealed.value.envelope,
+                row.sealed.value.nonce,
+                row.sealed.value.ciphertext,
+                previous,
+            ],
+        )?
+    } else {
+        tx.execute(
+            "INSERT INTO secrets VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+            params![
+                row.id,
+                row.project_id,
+                row.environment_id,
+                row.revision,
+                row.key_id,
+                row.sealed.metadata.envelope,
+                row.sealed.metadata.nonce,
+                row.sealed.metadata.ciphertext,
+                row.sealed.value.envelope,
+                row.sealed.value.nonce,
+                row.sealed.value.ciphertext,
+            ],
+        )?
+    };
+    if changed != 1 {
+        return Err(BrokerError::RevisionConflict);
+    }
+    tx.execute(
+            "INSERT INTO audit_events(occurred_at_ms,operation,result,project_id,environment_id,secret_id) \
+             VALUES (?1,?2,1,?3,?4,?5)",
+            params![
+                now_ms(),
+                if previous.is_some() { 10 } else { 9 },
+                row.project_id,
+                row.environment_id,
+                row.id,
+            ],
+        )
+        .map_err(|_| BrokerError::AuditUnavailable)?;
+    Ok(())
 }

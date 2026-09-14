@@ -659,4 +659,73 @@ mod persistence_tests {
         drop(db);
         assert!(Database::open(directory.path()).is_ok());
     }
+    #[test]
+    fn import_audit_failure_rolls_back_the_whole_batch() {
+        use crate::secret_store::SecretRow;
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let mut db = Database::open(directory.path()).unwrap();
+        let key = VaultKey::generate_for_test();
+        let project = Project::create("Import example".into(), workspace.path()).unwrap();
+        let row = encrypt_project(&mut db, &key, &project);
+        db.save_project(&row, None, 4, None).unwrap();
+        let value = super::tests::generated();
+        let mut rows = Vec::new();
+        for i in 1..=2 {
+            let scope =
+                SecretScope::new(*project.id(), *project.environments()[0].id(), [i; 16], 1)
+                    .unwrap();
+            let sealed = SealedSecret::seal(
+                &key,
+                scope,
+                SecretMetadata::new(format!("IMPORTED_{i}"), String::new(), vec![]).unwrap(),
+                SecretValue::new(value.to_string(), false).unwrap(),
+                |key, nonce| {
+                    db.reserve_record(key, nonce)
+                        .map_err(|_| SecretError::ReservationFailed)
+                },
+            )
+            .unwrap();
+            rows.push(SecretRow {
+                id: scope.secret,
+                project_id: scope.project,
+                environment_id: scope.environment,
+                revision: 1,
+                key_id: *key.key_id(),
+                sealed,
+            });
+        }
+        db.connection.execute_batch("CREATE TRIGGER reject_import BEFORE INSERT ON audit_events WHEN NEW.operation=14 BEGIN SELECT RAISE(ABORT,'audit unavailable'); END").unwrap();
+        assert!(matches!(
+            db.import_secrets(&rows),
+            Err(BrokerError::AuditUnavailable)
+        ));
+        assert!(count(&db) == 0);
+        let events: i64 = db
+            .connection
+            .query_row(
+                "SELECT count(*) FROM audit_events WHERE operation=9",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(events == 0);
+        db.connection
+            .execute_batch("DROP TRIGGER reject_import")
+            .unwrap();
+        db.import_secrets(&rows).unwrap();
+        assert!(count(&db) == 2);
+        assert!(db.import_secrets(&rows).is_err());
+        assert!(count(&db) == 2);
+        {
+            let tx = db.connection.transaction().unwrap();
+            assert!(
+                tx.execute_batch(include_str!("../migrations/0005_import_audit.down.sql"))
+                    .is_err()
+            );
+        }
+        drop(db);
+        assert!(Database::open(directory.path()).is_ok());
+    }
 }

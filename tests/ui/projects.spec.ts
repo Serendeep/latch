@@ -54,6 +54,14 @@ test("project creation, explicit scope deletion, accessible confirmation, and lo
                 revision: "1",
               },
             ];
+          if (command === "import_preview")
+            return {
+              token: args.example ? null : "5".repeat(32),
+              missing: ["SERVICE_TOKEN"],
+              present: ["DATABASE_URL"],
+              empty: args.example ? [] : ["OPTIONAL_TOKEN"],
+            };
+          if (command === "import_commit") return [];
           const project = projects.find((item) => item.id === args.id);
           if (project) {
             if (command === "project_rename") project.name = String(args.name);
@@ -108,6 +116,39 @@ test("project creation, explicit scope deletion, accessible confirmation, and lo
       fullPage: true,
     });
   }
+  await page.getByRole("button", { name: "Import .env", exact: true }).click();
+  const review = page.getByRole("dialog", { name: "Review import" });
+  await expect(review).toBeVisible();
+  await expect(review.getByRole("button", { name: "Cancel" })).toBeFocused();
+  for (const theme of ["light", "dark"]) {
+    await page.evaluate(
+      (theme) =>
+        ((document.querySelector(".app") as HTMLElement).dataset.theme = theme),
+      theme,
+    );
+    expect(
+      (
+        await new AxeBuilder({ page })
+          .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
+          .analyze()
+      ).violations,
+    ).toEqual([]);
+    await page.screenshot({
+      path: `output/playwright/latch-import-${theme}.png`,
+      fullPage: false,
+    });
+  }
+  await page.keyboard.press("Escape");
+  await expect(review).not.toBeVisible();
+  await page
+    .getByRole("button", { name: "Compare .env.example", exact: true })
+    .click();
+  const comparison = page.getByRole("dialog", { name: "Expected variables" });
+  await expect(comparison).toBeVisible();
+  await expect(
+    comparison.getByText("SERVICE_TOKEN", { exact: true }),
+  ).toBeVisible();
+  await comparison.getByRole("button", { name: "Close", exact: true }).click();
   await page.getByRole("button", { name: "Add secret" }).click();
   await expect(page.getByRole("dialog")).toBeVisible();
   expect(

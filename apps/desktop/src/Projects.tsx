@@ -283,6 +283,7 @@ export default function Projects({ epoch }: { epoch: string }) {
                     key={`${project.id}:${environment}`}
                     epoch={epoch}
                     projectId={project.id}
+                    projectName={project.name}
                     environment={environment}
                   />
                 ) : null}

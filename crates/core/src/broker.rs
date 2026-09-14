@@ -7,6 +7,10 @@ use std::path::PathBuf;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BrokerError {
+    /// The selected file is invalid, unsupported, or exceeds import limits.
+    InvalidImport,
+    /// The review expired, changed scope, or was already consumed.
+    InvalidReview,
     /// Project input failed validation.
     InvalidProject,
     /// Project metadata changed since it was reviewed.
@@ -118,6 +122,28 @@ pub enum ProjectCommand {
 /// Typed secret operations constructed by narrowly scoped desktop commands.
 /// The enum is intentionally not deserializable and has no Debug implementation.
 pub enum SecretCommand {
+    /// Read one native-selected file. Paths are never accepted from the webview.
+    FilePreview {
+        /// Opaque destination project identity.
+        project_id: String,
+        /// Selected destination environment.
+        environment: protocol::Environment,
+        /// Native chooser result.
+        path: PathBuf,
+        /// Ignore all values and compare expected names when true.
+        example: bool,
+    },
+    /// Consume or cancel a names-only reviewed import.
+    ImportCommit {
+        /// Reviewed project identity.
+        project_id: String,
+        /// Reviewed environment.
+        environment: protocol::Environment,
+        /// Single-use review identity.
+        token: String,
+        /// False discards this review without writing records.
+        confirmed: bool,
+    },
     /// List metadata for exactly one project environment.
     List {
         /// Opaque project identity.
@@ -202,6 +228,8 @@ pub enum SecretCommand {
 pub enum SecretResult {
     /// Metadata-only list.
     List(Vec<crate::secret::SecretSummary>),
+    /// Names-only import preview or comparison.
+    Review(crate::import::FileReview),
     /// One deliberately revealed value.
     Revealed(crate::secret::RevealedSecret),
 }
@@ -356,7 +384,10 @@ impl Broker {
                 && tags.iter().all(|tag| tag.len() <= 256)
         };
         match &command {
-            SecretCommand::List { project_id, .. } | SecretCommand::Create { project_id, .. } => {
+            SecretCommand::List { project_id, .. }
+            | SecretCommand::Create { project_id, .. }
+            | SecretCommand::FilePreview { project_id, .. }
+            | SecretCommand::ImportCommit { project_id, .. } => {
                 crate::project::parse_id(project_id)?;
             }
             SecretCommand::Update {
@@ -389,6 +420,9 @@ impl Broker {
                     return Err(BrokerError::InvalidSecret);
                 }
             }
+        }
+        if let SecretCommand::ImportCommit { token, .. } = &command {
+            crate::project::parse_id(token).map_err(|_| BrokerError::InvalidReview)?;
         }
         match &command {
             SecretCommand::Create {
@@ -458,6 +492,15 @@ mod linux {
         time::Duration,
     };
 
+    struct ImportReview {
+        token: String,
+        project: [u8; 16],
+        environment: [u8; 16],
+        created: std::time::Instant,
+        names: Vec<String>,
+        rows: Vec<SecretRow>,
+    }
+
     struct Shared {
         session: VaultSession,
         exists: bool,
@@ -466,13 +509,22 @@ mod linux {
         failure: Option<BrokerError>,
         lock_event: Option<i64>,
         selection: Option<(String, zeroize::Zeroizing<String>, std::time::Instant)>,
+        import_review: Option<ImportReview>,
     }
     impl Shared {
         fn unlocked(&mut self) -> bool {
+            if self
+                .import_review
+                .as_ref()
+                .is_some_and(|review| review.created.elapsed() >= Duration::from_secs(300))
+            {
+                self.import_review = None;
+            }
             let had_key = self.session.has_key();
             let unlocked = self.session.is_unlocked();
             if had_key && !unlocked {
                 self.selection = None;
+                self.import_review = None;
                 self.lock_event.get_or_insert_with(now_ms);
             }
             unlocked
@@ -513,6 +565,7 @@ mod linux {
                 failure: None,
                 lock_event: None,
                 selection: None,
+                import_review: None,
             }));
             let busy = Arc::new(AtomicBool::new(false));
             let (sender, receiver) = mpsc::sync_channel(1);
@@ -751,6 +804,7 @@ mod linux {
                 let active = state.session.has_key() || state.session.has_pending();
                 state.session.lock();
                 state.selection = None;
+                state.import_review = None;
                 match state.epoch.checked_add(1) {
                     Some(epoch) => state.epoch = epoch,
                     None => state.failure = Some(BrokerError::InvalidState),
@@ -817,6 +871,7 @@ mod linux {
                         if result.is_err() {
                             shared.session.lock();
                             shared.selection = None;
+                            shared.import_review = None;
                         }
                         if matches!(
                             result,
@@ -841,6 +896,7 @@ mod linux {
                         shared.failure = result.as_ref().err().copied();
                         shared.session.lock();
                         shared.selection = None;
+                        shared.import_review = None;
                     }
                     let _ = reply.send(result);
                 }
@@ -858,6 +914,7 @@ mod linux {
                         shared.failure = result.as_ref().err().copied();
                         shared.session.lock();
                         shared.selection = None;
+                        shared.import_review = None;
                     }
                     let _ = reply.send(result);
                 }
@@ -877,6 +934,7 @@ mod linux {
             shared.failure = Some(BrokerError::AuditUnavailable);
             shared.session.lock();
             shared.selection = None;
+            shared.import_review = None;
         }
     }
 
@@ -892,6 +950,7 @@ mod linux {
             epoch: 3,
             failure: None,
             lock_event: None,
+            import_review: None,
             selection: Some((
                 "a".repeat(32),
                 zeroize::Zeroizing::new("/tmp/example".into()),
@@ -904,12 +963,27 @@ mod linux {
         );
         assert!(shared.selection.is_some());
         assert!(check_project_state(&mut shared, 3).is_ok());
+        let make_review = |age| ImportReview {
+            token: "b".repeat(32),
+            project: [1; 16],
+            environment: [2; 16],
+            created: std::time::Instant::now() - Duration::from_secs(age),
+            names: vec![],
+            rows: vec![],
+        };
+        shared.import_review = Some(make_review(301));
+        assert!(check_project_state(&mut shared, 3).is_ok());
+        assert!(shared.import_review.is_none());
+        shared.import_review = Some(make_review(0));
+        assert!(check_project_state(&mut shared, 2).is_err());
+        assert!(shared.import_review.is_some());
         shared.session.lock();
         assert_eq!(
             check_project_state(&mut shared, 3),
             Err(BrokerError::Cancelled)
         );
         assert!(shared.selection.is_none());
+        assert!(shared.import_review.is_none());
     }
 
     fn parse_epoch(value: &str) -> Result<u64, BrokerError> {
@@ -928,6 +1002,7 @@ mod linux {
         }
         if !shared.unlocked() {
             shared.selection = None;
+            shared.import_review = None;
             return Err(BrokerError::Cancelled);
         }
         Ok(())
@@ -1194,6 +1269,16 @@ mod linux {
                 project_id,
                 environment,
             }
+            | SecretCommand::FilePreview {
+                project_id,
+                environment,
+                ..
+            }
+            | SecretCommand::ImportCommit {
+                project_id,
+                environment,
+                ..
+            }
             | SecretCommand::Create {
                 project_id,
                 environment,
@@ -1222,6 +1307,135 @@ mod linux {
         };
         let project_id = parse_id(project_text)?;
         let environment_id = project_environment(db, state, epoch, project_id, kind)?;
+
+        if let SecretCommand::FilePreview { path, example, .. } = command {
+            {
+                let mut shared = state.lock().map_err(|_| BrokerError::StorageUnavailable)?;
+                check_project_state(&mut shared, epoch)?;
+                shared.import_review = None;
+            }
+            let bytes = crate::import::read(&path)?;
+            let entries = crate::import::parse(&bytes, example)?;
+            drop(bytes);
+            let existing = list_secrets(db, state, epoch, project_id, environment_id)?;
+            let mut review = crate::import::FileReview {
+                token: None,
+                missing: vec![],
+                present: vec![],
+                empty: vec![],
+            };
+            let mut candidates = Vec::new();
+            for entry in entries {
+                if existing
+                    .iter()
+                    .any(|item| item.name.eq_ignore_ascii_case(&entry.name))
+                {
+                    review.present.push(entry.name);
+                } else if !example
+                    && entry
+                        .value
+                        .as_ref()
+                        .is_some_and(|value| value.expose().is_empty())
+                {
+                    review.empty.push(entry.name);
+                } else {
+                    review.missing.push(entry.name.clone());
+                    if !example {
+                        candidates.push(entry);
+                    }
+                }
+            }
+            if existing.len() + candidates.len() > 256 {
+                return Err(BrokerError::SecretLimit);
+            }
+            let mut rows = Vec::with_capacity(candidates.len());
+            for entry in candidates {
+                let mut shared = state.lock().map_err(|_| BrokerError::StorageUnavailable)?;
+                check_project_state(&mut shared, epoch)?;
+                let key = shared.session.key().ok_or(BrokerError::Cancelled)?;
+                let id = random_id()?;
+                let scope = SecretScope::new(project_id, environment_id, id, 1)?;
+                let sealed = SealedSecret::seal(
+                    key,
+                    scope,
+                    SecretMetadata::new(entry.name, String::new(), vec![])?,
+                    entry.value.ok_or(BrokerError::InvalidImport)?,
+                    |key, nonce| {
+                        db.reserve_record(key, nonce)
+                            .map_err(|_| crate::secret::SecretError::ReservationFailed)
+                    },
+                )?;
+                rows.push(SecretRow {
+                    id,
+                    project_id,
+                    environment_id,
+                    revision: 1,
+                    key_id: *key.key_id(),
+                    sealed,
+                });
+            }
+            let mut shared = state.lock().map_err(|_| BrokerError::StorageUnavailable)?;
+            check_project_state(&mut shared, epoch)?;
+            if example {
+                db.audit_comparison(&project_id, &environment_id)?;
+            } else if !rows.is_empty() {
+                let token = hex(&random_id()?);
+                shared.import_review = Some(ImportReview {
+                    token: token.clone(),
+                    project: project_id,
+                    environment: environment_id,
+                    created: std::time::Instant::now(),
+                    names: review.missing.clone(),
+                    rows,
+                });
+                review.token = Some(token);
+            }
+            return Ok(SecretResult::Review(review));
+        }
+        if let SecretCommand::ImportCommit {
+            token, confirmed, ..
+        } = command
+        {
+            let existing = list_secrets(db, state, epoch, project_id, environment_id)?;
+            let mut shared = state.lock().map_err(|_| BrokerError::StorageUnavailable)?;
+            check_project_state(&mut shared, epoch)?;
+            let review = shared
+                .import_review
+                .as_ref()
+                .ok_or(BrokerError::InvalidReview)?;
+            if review.token != token
+                || review.project != project_id
+                || review.environment != environment_id
+            {
+                return Err(BrokerError::InvalidReview);
+            }
+            let review = shared
+                .import_review
+                .take()
+                .ok_or(BrokerError::InvalidReview)?;
+            if confirmed {
+                if existing.iter().any(|item| {
+                    review
+                        .names
+                        .iter()
+                        .any(|name| name.eq_ignore_ascii_case(&item.name))
+                }) {
+                    return Err(BrokerError::SecretExists);
+                }
+                if existing.len() + review.rows.len() > 256 {
+                    return Err(BrokerError::SecretLimit);
+                }
+                db.import_secrets(&review.rows)?;
+            }
+            drop(shared);
+            return Ok(SecretResult::List(list_secrets(
+                db,
+                state,
+                epoch,
+                project_id,
+                environment_id,
+            )?));
+        }
 
         if matches!(command, SecretCommand::List { .. }) {
             return Ok(SecretResult::List(list_secrets(
@@ -1471,6 +1685,7 @@ mod linux {
                 .checked_add(1)
                 .ok_or(BrokerError::InvalidState)?;
             shared.selection = None;
+            shared.import_review = None;
             if !shared.session.complete_unlock(ticket, key) {
                 return Err(BrokerError::Cancelled);
             }
@@ -1781,6 +1996,180 @@ mod tests {
             )
             .unwrap();
         assert!(matches!(deleted, SecretResult::List(items) if items.is_empty()));
+        // Import reviews contain ciphertext and bind to the reviewed file bytes and scope.
+        let import_path = project_dir.path().join("selected-input");
+        let import_input = Zeroizing::new(format!(
+            "IMPORTED_ONE={}\nIMPORTED_TWO='{}'\nEMPTY=\n",
+            secret_value.as_str(),
+            secret_value.as_str()
+        ));
+        std::fs::write(&import_path, import_input.as_bytes()).unwrap();
+        let preview = || {
+            let result = broker
+                .secrets(
+                    SecretCommand::FilePreview {
+                        project_id: project_id.clone(),
+                        environment: protocol::Environment::Development,
+                        path: import_path.clone(),
+                        example: false,
+                    },
+                    epoch.clone(),
+                )
+                .unwrap();
+            let SecretResult::Review(review) = result else {
+                panic!("expected names only");
+            };
+            let serialized = serde_json::to_string(&review).unwrap();
+            assert!(!serialized.contains(secret_value.as_str()));
+            review
+        };
+        let review = preview();
+        assert!(review.missing.len() == 2 && review.empty == ["EMPTY"]);
+        let token = review.token.unwrap();
+        assert!(matches!(
+            broker.secrets(
+                SecretCommand::ImportCommit {
+                    project_id: project_id.clone(),
+                    environment: protocol::Environment::Test,
+                    token: token.clone(),
+                    confirmed: true,
+                },
+                epoch.clone()
+            ),
+            Err(BrokerError::InvalidReview)
+        ));
+        broker
+            .secrets(
+                SecretCommand::ImportCommit {
+                    project_id: project_id.clone(),
+                    environment: protocol::Environment::Development,
+                    token: token.clone(),
+                    confirmed: false,
+                },
+                epoch.clone(),
+            )
+            .unwrap();
+        assert!(matches!(
+            broker.secrets(
+                SecretCommand::ImportCommit {
+                    project_id: project_id.clone(),
+                    environment: protocol::Environment::Development,
+                    token,
+                    confirmed: true
+                },
+                epoch.clone()
+            ),
+            Err(BrokerError::InvalidReview)
+        ));
+        let conflict_review = preview();
+        let created = broker
+            .secrets(
+                SecretCommand::Create {
+                    project_id: project_id.clone(),
+                    environment: protocol::Environment::Development,
+                    name: "IMPORTED_ONE".into(),
+                    description: String::new(),
+                    tags: vec![],
+                    value: secret_value.to_string(),
+                    allow_empty: false,
+                },
+                epoch.clone(),
+            )
+            .unwrap();
+        let SecretResult::List(conflict) = created else {
+            panic!("expected metadata");
+        };
+        assert!(matches!(
+            broker.secrets(
+                SecretCommand::ImportCommit {
+                    project_id: project_id.clone(),
+                    environment: protocol::Environment::Development,
+                    token: conflict_review.token.unwrap(),
+                    confirmed: true
+                },
+                epoch.clone()
+            ),
+            Err(BrokerError::SecretExists)
+        ));
+        broker
+            .secrets(
+                SecretCommand::Delete {
+                    project_id: project_id.clone(),
+                    environment: protocol::Environment::Development,
+                    id: conflict[0].id.clone(),
+                    revision: "1".into(),
+                },
+                epoch.clone(),
+            )
+            .unwrap();
+        let review = preview();
+        // Changing the source after preview does not change the reviewed encrypted candidates.
+        std::fs::write(&import_path, b"CHANGED=\n").unwrap();
+        let token = review.token.unwrap();
+        let imported = broker
+            .secrets(
+                SecretCommand::ImportCommit {
+                    project_id: project_id.clone(),
+                    environment: protocol::Environment::Development,
+                    token: token.clone(),
+                    confirmed: true,
+                },
+                epoch.clone(),
+            )
+            .unwrap();
+        let SecretResult::List(imported) = imported else {
+            panic!("expected metadata");
+        };
+        assert!(imported.len() == 2 && imported[0].name == "IMPORTED_ONE");
+        assert!(matches!(
+            broker.secrets(
+                SecretCommand::ImportCommit {
+                    project_id: project_id.clone(),
+                    environment: protocol::Environment::Development,
+                    token,
+                    confirmed: true
+                },
+                epoch.clone()
+            ),
+            Err(BrokerError::InvalidReview)
+        ));
+        let result = broker
+            .secrets(
+                SecretCommand::Reveal {
+                    project_id: project_id.clone(),
+                    environment: protocol::Environment::Development,
+                    id: imported[0].id.clone(),
+                    revision: "1".into(),
+                },
+                epoch.clone(),
+            )
+            .unwrap();
+        assert!(
+            matches!(result, SecretResult::Revealed(value) if value.value.as_str() == secret_value.as_str())
+        );
+        std::fs::write(&import_path, import_input.as_bytes()).unwrap();
+        let review = preview();
+        assert!(review.token.is_none() && review.present.len() == 2 && review.missing.is_empty());
+        std::fs::write(
+            &import_path,
+            b"IMPORTED_ONE=${IGNORED}\nMISSING=$(ignored)\n",
+        )
+        .unwrap();
+        let result = broker
+            .secrets(
+                SecretCommand::FilePreview {
+                    project_id: project_id.clone(),
+                    environment: protocol::Environment::Development,
+                    path: import_path.clone(),
+                    example: true,
+                },
+                epoch.clone(),
+            )
+            .unwrap();
+        assert!(
+            matches!(result, SecretResult::Review(review) if review.token.is_none() && review.present == ["IMPORTED_ONE"] && review.missing == ["MISSING"])
+        );
+        std::fs::remove_file(&import_path).unwrap();
         let mut extra_projects = Vec::new();
         for index in 0..99 {
             let path = project_dir.path().join(index.to_string());
@@ -1941,7 +2330,7 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("secret audit read failed");
-        assert!(secret_events == 5, "secret audit events missing");
+        assert!(secret_events == 10, "secret audit events missing");
         let bytes = std::fs::read(dir.path().join("vault.sqlite3")).expect("database read failed");
         assert!(
             !bytes.windows(input.len()).any(|b| b == input.as_bytes()),

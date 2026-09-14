@@ -279,10 +279,12 @@ mod tests {
                     .connection
                     .pragma_query_value(None, "user_version", |r| r.get(0))
                     .unwrap();
-                assert_eq!(version, 4);
+                assert_eq!(version, 5);
                 let count: i64 = db.connection.query_row("SELECT count(*) FROM audit_events WHERE occurred_at_ms=1 AND operation=2 AND result=2 AND project_id IS NULL", [], |r| r.get(0)).unwrap();
                 assert_eq!(count, 1);
                 let tx = db.connection.transaction().unwrap();
+                tx.execute_batch(include_str!("../migrations/0005_import_audit.down.sql"))
+                    .unwrap();
                 tx.execute_batch(include_str!("../migrations/0004_copy_audit.down.sql"))
                     .unwrap();
                 tx.execute_batch(include_str!("../migrations/0003_secrets.down.sql"))
@@ -342,6 +344,8 @@ mod tests {
                     .unwrap();
                 assert!(next == 8);
                 let tx = db.connection.transaction().unwrap();
+                tx.execute_batch(include_str!("../migrations/0005_import_audit.down.sql"))
+                    .unwrap();
                 tx.execute_batch(include_str!("../migrations/0004_copy_audit.down.sql"))
                     .unwrap();
                 tx.execute_batch(include_str!("../migrations/0003_secrets.down.sql"))

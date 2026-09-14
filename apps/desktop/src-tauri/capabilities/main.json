@@ -16,6 +16,8 @@
     "allow-environment-create",
     "allow-environment-delete",
     "allow-secrets-list",
+    "allow-import-preview",
+    "allow-import-commit",
     "allow-secret-create",
     "allow-secret-update",
     "allow-secret-delete",

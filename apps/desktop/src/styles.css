@@ -615,3 +615,24 @@ footer {
     scroll-behavior: auto !important;
   }
 }
+
+.file-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.65rem;
+  margin-bottom: 1rem;
+}
+.file-review-list {
+  max-height: 40vh;
+  overflow: auto;
+}
+.file-review-list h3 {
+  font-size: 0.9rem;
+}
+.file-review-list ul {
+  padding-left: 1.25rem;
+}
+.file-review-list code {
+  overflow-wrap: anywhere;
+}

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-import-commit"
+description = "Enables the import_commit command without any pre-configured scope."
+commands.allow = ["import_commit"]
+
+[[permission]]
+identifier = "deny-import-commit"
+description = "Denies the import_commit command without any pre-configured scope."
+commands.deny = ["import_commit"]

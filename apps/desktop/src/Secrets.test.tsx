@@ -118,3 +118,108 @@ test("copies through narrow IPC with a bounded clear period", async () => {
     "SERVICE_TOKEN copied. Clears in 60 seconds if unchanged.",
   );
 });
+
+test("reviews names before importing and sends only scope and a token", async () => {
+  const token = "a".repeat(32);
+  vi.mocked(invoke).mockImplementation((command) => {
+    if (command === "secrets_list") return Promise.resolve([]);
+    if (command === "import_preview")
+      return Promise.resolve({
+        token,
+        missing: ["NEW_NAME"],
+        present: ["EXISTING_NAME"],
+        empty: ["EMPTY_NAME"],
+      });
+    if (command === "import_commit")
+      return Promise.resolve([
+        {
+          id: "b".repeat(32),
+          name: "NEW_NAME",
+          description: "",
+          tags: [],
+          revision: "1",
+        },
+      ]);
+    return Promise.reject("invalid_state");
+  });
+  render(
+    <Secrets
+      epoch="1"
+      projectId={"c".repeat(32)}
+      projectName="Example project"
+      environment="staging"
+    />,
+  );
+  await screen.findByText("No secrets in staging");
+  await userEvent.click(screen.getByRole("button", { name: "Import .env" }));
+  const dialog = within(
+    await screen.findByRole("dialog", { name: "Review import" }),
+  );
+  expect(dialog.getByText("Example project / staging")).toBeVisible();
+  expect(dialog.getByText("NEW_NAME")).toBeVisible();
+  expect(dialog.getByText("EXISTING_NAME")).toBeVisible();
+  expect(dialog.getByText("EMPTY_NAME")).toBeVisible();
+  expect(
+    vi
+      .mocked(invoke)
+      .mock.calls.some(([command]) => command === "import_commit"),
+  ).toBe(false);
+  await userEvent.click(
+    dialog.getByRole("button", { name: "Import 1 secret" }),
+  );
+  await screen.findByText("1 secret imported into staging.");
+  expect(invoke).toHaveBeenCalledWith("import_commit", {
+    lockEpoch: "1",
+    projectId: "c".repeat(32),
+    environment: "staging",
+    token,
+    confirmed: true,
+  });
+});
+
+test("cancels a review and compares example names without creating secrets", async () => {
+  const token = "d".repeat(32);
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "secrets_list" || command === "import_commit")
+      return Promise.resolve([]);
+    if (command === "import_preview")
+      return Promise.resolve({
+        token: (args as { example: boolean }).example ? null : token,
+        missing: ["EXPECTED_NAME"],
+        present: [],
+        empty: [],
+      });
+    return Promise.reject("invalid_state");
+  });
+  render(<Secrets epoch="1" projectId={"e".repeat(32)} environment="test" />);
+  await screen.findByText("No secrets in test");
+  await userEvent.click(screen.getByRole("button", { name: "Import .env" }));
+  await userEvent.click(
+    within(
+      await screen.findByRole("dialog", { name: "Review import" }),
+    ).getByRole("button", { name: "Cancel" }),
+  );
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("import_commit", {
+      lockEpoch: "1",
+      projectId: "e".repeat(32),
+      environment: "test",
+      token,
+      confirmed: false,
+    }),
+  );
+  await userEvent.click(
+    screen.getByRole("button", { name: "Compare .env.example" }),
+  );
+  const dialog = within(
+    await screen.findByRole("dialog", { name: "Expected variables" }),
+  );
+  expect(dialog.getByText("EXPECTED_NAME")).toBeVisible();
+  expect(dialog.queryByRole("button", { name: /Import/ })).toBeNull();
+  await userEvent.click(dialog.getByRole("button", { name: "Close" }));
+  expect(
+    vi
+      .mocked(invoke)
+      .mock.calls.filter(([command]) => command === "import_commit"),
+  ).toHaveLength(1);
+});

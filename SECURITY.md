@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-There is no supported production release yet. The development build supports vault creation, passphrase unlocking, project metadata, secret management, individual reveal, and clipboard copy on Linux; native folder-picker and clipboard behavior remain unqualified. Agent delivery and recovery are not implemented. Do not entrust it with credentials.
+There is no supported production release yet. The development build supports vault creation, passphrase unlocking, project metadata, secret management, individual reveal, clipboard copy, configuration import, and example-name comparison on Linux; native folder-picker and clipboard behavior remain unqualified. Agent delivery and recovery are not implemented. Do not entrust it with credentials.
 
 ## Reporting a vulnerability
 
@@ -37,3 +37,11 @@ Canonical directory checks reject traversal and lossy path decoding. They do not
 Dependencies and toolchains are pinned in manifests and lockfiles. CI includes dependency audits and secret scanning with full value redaction. Tauri's Linux dependency graph currently includes unmaintained GTK3 bindings and a [GLib soundness advisory](https://rustsec.org/advisories/RUSTSEC-2024-0429). These findings remain visible and require review before release.
 
 No signed release or updater exists. Public release requires qualified platform key-store behavior, native IPC testing, recovery testing, signing and artifact verification, and external review of the cryptographic and approval design. Automated checks alone do not establish those properties.
+
+## Configuration import
+
+Only the native Rust file picker supplies import paths. Rust rejects final-component symlinks, non-regular files, parent traversal, invalid UTF-8, NUL bytes, and input above 1 MiB or 256 assignments. Reads are bounded and do not invoke a shell or evaluate expansions. The documented literal parser rejects ambiguous or unsupported import syntax with fixed errors. Example comparison discards right-hand sides without constructing credential values.
+
+Import preview returns names, existing-name conflicts, skipped-empty names, and a random single-use token. Candidates are authenticated ciphertext encrypted under the vault key with durably reserved nonces. One pending review is bound to the project, environment identity, lock epoch, and a five-minute deadline. Manual/automatic locking, cancellation, expiry, and replacement invalidate it. Commit consumes the review, rechecks current names and capacity, and saves the batch plus per-secret create events and an import event atomically. Comparison records a scoped metadata-only audit event. Neither operation includes source contents or values in its response or audit records.
+
+The picker grants access to the selected file, not a project-directory sandbox. Parent symlinks and concurrent file edits before/during the single read are not excluded. The preview binds the exact parsed bytes retained as ciphertext, not a future file read. Source plaintext remains on disk; this feature cannot protect it from same-user software or guarantee filesystem erasure. Native file-picker acceptance still requires manual platform qualification.

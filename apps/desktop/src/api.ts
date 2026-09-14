@@ -24,6 +24,7 @@ import type {
   ProjectPage,
   Environment,
   SecretSummary,
+  FileReview,
 } from "./generated/core";
 
 export type RevealedSecret = { id: string; revision: string; value: string };
@@ -175,5 +176,35 @@ export function copySecret(
     revision: secret.revision,
     confirmed: true,
     clearAfterSeconds,
+  });
+}
+
+export function previewImport(
+  lockEpoch: string,
+  projectId: string,
+  environment: Environment,
+  example: boolean,
+): Promise<FileReview | null> {
+  return invoke("import_preview", {
+    lockEpoch,
+    projectId,
+    environment,
+    example,
+  });
+}
+
+export function commitImport(
+  lockEpoch: string,
+  projectId: string,
+  environment: Environment,
+  token: string,
+  confirmed: boolean,
+): Promise<SecretSummary[]> {
+  return invoke("import_commit", {
+    lockEpoch,
+    projectId,
+    environment,
+    token,
+    confirmed,
   });
 }

@@ -1,6 +1,7 @@
 //! Exports or checks the small metadata-only frontend contract.
 use latch_core::{
     AppStatus, VaultAvailability,
+    import::FileReview,
     project::{DirectorySelection, ProjectPage, ProjectSummary},
     protocol::Environment,
     secret::SecretSummary,
@@ -21,6 +22,7 @@ fn main() {
             ProjectPage::decl(&config),
             DirectorySelection::decl(&config),
             SecretSummary::decl(&config),
+            FileReview::decl(&config),
         ]
         .iter()
         .map(|decl| format!("export {decl}\n"))
