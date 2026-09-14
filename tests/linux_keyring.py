@@ -38,10 +38,9 @@ def main():
                 # Only unmount this run's private document portal, never the user session's.
                 for name in ("doc", "gvfs"):
                     mount = Path(env["XDG_RUNTIME_DIR"]) / name
-                    if os.path.ismount(mount):
-                        subprocess.run(["fusermount3", "-u", "-z", str(mount)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                        if os.path.ismount(mount):
-                            raise SystemExit("Could not unmount the isolated test portal")
+                    # A disconnected FUSE endpoint makes ismount() return false while
+                    # still preventing TemporaryDirectory from removing the path.
+                    subprocess.run(["fusermount3", "-u", "-z", str(mount)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             raise SystemExit(result)
     root = Path(sys.argv[1])
     if (os.environ.get("LATCH_ISOLATED_KEYRING_TEST") != "1"
