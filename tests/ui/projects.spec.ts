@@ -37,6 +37,23 @@ test("project creation, explicit scope deletion, accessible confirmation, and lo
               revision: "1",
               environments: ["development", "test", "staging", "production"],
             });
+          if (command === "secrets_list")
+            return [
+              {
+                id: "3".repeat(32),
+                name: "DATABASE_URL",
+                description: "Local database connection",
+                tags: ["database", "local"],
+                revision: "2",
+              },
+              {
+                id: "4".repeat(32),
+                name: "PAYMENTS_TEST_KEY",
+                description: "Sandbox billing requests",
+                tags: ["payments"],
+                revision: "1",
+              },
+            ];
           const project = projects.find((item) => item.id === args.id);
           if (project) {
             if (command === "project_rename") project.name = String(args.name);
@@ -75,6 +92,8 @@ test("project creation, explicit scope deletion, accessible confirmation, and lo
   await expect(page.getByLabel("Project name", { exact: true })).toHaveValue(
     "Renamed workspace",
   );
+  await expect(page.getByText("DATABASE_URL", { exact: true })).toBeVisible();
+  await expect(page.getByText("••••••••••••").first()).toBeVisible();
   for (const theme of ["light", "dark"]) {
     await page.getByLabel("Appearance").selectOption(theme);
     expect(
@@ -84,7 +103,21 @@ test("project creation, explicit scope deletion, accessible confirmation, and lo
           .analyze()
       ).violations,
     ).toEqual([]);
+    await page.screenshot({
+      path: `output/playwright/latch-${theme}.png`,
+      fullPage: true,
+    });
   }
+  await page.getByRole("button", { name: "Add secret" }).click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  expect(
+    (
+      await new AxeBuilder({ page })
+        .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
+        .analyze()
+    ).violations,
+  ).toEqual([]);
+  await page.keyboard.press("Escape");
   await page
     .getByRole("button", { name: "Remove production", exact: true })
     .click();
@@ -120,10 +153,12 @@ test("project creation, explicit scope deletion, accessible confirmation, and lo
   ).toBeVisible();
   await page.setViewportSize({ width: 360, height: 740 });
   expect(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth <= innerWidth,
+    await page.evaluate(() =>
+      [...document.querySelectorAll("body *")]
+        .filter((element) => element.getBoundingClientRect().right > innerWidth)
+        .map((element) => `${element.tagName}.${element.className}`),
     ),
-  ).toBe(true);
+  ).toEqual([]);
   await page
     .getByRole("button", { name: "Delete project", exact: true })
     .click();

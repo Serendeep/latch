@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import Secrets from "./Secrets";
 import {
   chooseProjectDirectory,
   listProjects,
@@ -21,6 +22,8 @@ export default function Projects({ epoch }: { epoch: string }) {
   const [cursor, setCursor] = useState<string | null>(null);
   const [refresh, setRefresh] = useState(0);
   const [selected, setSelected] = useState("");
+  const [selectedEnvironment, setSelectedEnvironment] =
+    useState<Environment>("development");
   const [directory, setDirectory] = useState<DirectorySelection | null>(null);
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState("");
@@ -80,6 +83,9 @@ export default function Projects({ epoch }: { epoch: string }) {
   const project =
     page?.projects.find((item) => item.id === selected) ??
     (selected ? undefined : page?.projects[0]);
+  const environment = project?.environments.includes(selectedEnvironment)
+    ? selectedEnvironment
+    : (project?.environments[0] ?? "development");
 
   return (
     <section
@@ -211,22 +217,45 @@ export default function Projects({ epoch }: { epoch: string }) {
                     Save name
                   </button>
                 </form>
-                <h3>Environments</h3>
-                <p className="supporting-text">
-                  Each scope is independent. Missing scopes never fall back to
-                  another environment.
-                </p>
-                <ul className="environment-list">
+                <div className="scope-header">
+                  <div>
+                    <h3>Environments</h3>
+                    <p className="supporting-text">
+                      Select the exact scope you want to manage.
+                    </p>
+                  </div>
+                  <span className="scope-count">
+                    {project.environments.length}/4 active
+                  </span>
+                </div>
+                <ul
+                  className="environment-list"
+                  aria-label="Project environments"
+                >
                   {kinds.map((kind) => {
                     const exists = project.environments.includes(kind);
+                    const current = exists && environment === kind;
                     return (
-                      <li key={kind}>
-                        <span>
-                          {kind}
-                          <small>{exists ? "Available" : "Not created"}</small>
-                        </span>
+                      <li key={kind} data-active={current || undefined}>
                         <button
                           type="button"
+                          className="environment-select"
+                          disabled={pending || !exists}
+                          aria-label={`${kind} environment`}
+                          aria-current={current ? "true" : undefined}
+                          onClick={() => setSelectedEnvironment(kind)}
+                        >
+                          <span className="scope-dot" aria-hidden="true" />
+                          <span>
+                            {kind}
+                            <small>
+                              {exists ? "Available" : "Not created"}
+                            </small>
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          className="text-action"
                           disabled={pending}
                           aria-label={`${exists ? "Remove" : "Recreate"} ${kind}`}
                           onClick={() => {
@@ -249,8 +278,17 @@ export default function Projects({ epoch }: { epoch: string }) {
                     );
                   })}
                 </ul>
+                {project.environments.length > 0 ? (
+                  <Secrets
+                    key={`${project.id}:${environment}`}
+                    epoch={epoch}
+                    projectId={project.id}
+                    environment={environment}
+                  />
+                ) : null}
                 <button
                   type="button"
+                  className="danger-link"
                   disabled={pending}
                   onClick={() => setConfirmation({ project })}
                 >

@@ -92,6 +92,7 @@ test("does not switch to another project's editor when the created project is on
     environments: ["development"],
   };
   vi.mocked(invoke).mockImplementation((command) => {
+    if (command === "secrets_list") return Promise.resolve([]);
     if (command === "project_choose_directory")
       return Promise.resolve({ token: "c".repeat(32), directory: "/tmp/new" });
     if (command === "project_create")
