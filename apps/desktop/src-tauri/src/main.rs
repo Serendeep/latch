@@ -2,9 +2,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 use latch_core::{
     AppStatus,
-    broker::{Broker, BrokerError, ProjectCommand},
+    broker::{Broker, BrokerError, ProjectCommand, SecretCommand, SecretResult},
     project::{DirectorySelection, ProjectPage},
     protocol::Environment,
+    secret::{RevealedSecret, SecretSummary},
 };
 use std::sync::Arc;
 use tauri::Manager;
@@ -231,6 +232,195 @@ async fn environment_delete(
     .await
 }
 
+async fn secret_operation(
+    broker: Arc<Broker>,
+    command: SecretCommand,
+    epoch: String,
+) -> Result<SecretResult, BrokerError> {
+    tauri::async_runtime::spawn_blocking(move || broker.secrets(command, epoch))
+        .await
+        .map_err(|_| BrokerError::StorageUnavailable)?
+}
+
+#[tauri::command]
+async fn secrets_list(
+    window: tauri::WebviewWindow,
+    broker: tauri::State<'_, Arc<Broker>>,
+    project_id: String,
+    environment: String,
+    lock_epoch: String,
+) -> Result<Vec<SecretSummary>, BrokerError> {
+    authorize(&window)?;
+    let environment = environment
+        .parse()
+        .map_err(|_| BrokerError::InvalidSecret)?;
+    match secret_operation(
+        Arc::clone(&broker),
+        SecretCommand::List {
+            project_id,
+            environment,
+        },
+        lock_epoch,
+    )
+    .await?
+    {
+        SecretResult::List(items) => Ok(items),
+        SecretResult::Revealed(_) => Err(BrokerError::InvalidState),
+    }
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn secret_create(
+    window: tauri::WebviewWindow,
+    broker: tauri::State<'_, Arc<Broker>>,
+    project_id: String,
+    environment: String,
+    name: String,
+    description: String,
+    tags: Vec<String>,
+    value: String,
+    allow_empty: bool,
+    lock_epoch: String,
+) -> Result<Vec<SecretSummary>, BrokerError> {
+    authorize(&window)?;
+    let environment = environment
+        .parse()
+        .map_err(|_| BrokerError::InvalidSecret)?;
+    match secret_operation(
+        Arc::clone(&broker),
+        SecretCommand::Create {
+            project_id,
+            environment,
+            name,
+            description,
+            tags,
+            value,
+            allow_empty,
+        },
+        lock_epoch,
+    )
+    .await?
+    {
+        SecretResult::List(items) => Ok(items),
+        SecretResult::Revealed(_) => Err(BrokerError::InvalidState),
+    }
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn secret_update(
+    window: tauri::WebviewWindow,
+    broker: tauri::State<'_, Arc<Broker>>,
+    project_id: String,
+    environment: String,
+    id: String,
+    revision: String,
+    name: String,
+    description: String,
+    tags: Vec<String>,
+    value: Option<String>,
+    allow_empty: bool,
+    lock_epoch: String,
+) -> Result<Vec<SecretSummary>, BrokerError> {
+    authorize(&window)?;
+    let environment = environment
+        .parse()
+        .map_err(|_| BrokerError::InvalidSecret)?;
+    match secret_operation(
+        Arc::clone(&broker),
+        SecretCommand::Update {
+            project_id,
+            environment,
+            id,
+            revision,
+            name,
+            description,
+            tags,
+            value,
+            allow_empty,
+        },
+        lock_epoch,
+    )
+    .await?
+    {
+        SecretResult::List(items) => Ok(items),
+        SecretResult::Revealed(_) => Err(BrokerError::InvalidState),
+    }
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn secret_delete(
+    window: tauri::WebviewWindow,
+    broker: tauri::State<'_, Arc<Broker>>,
+    project_id: String,
+    environment: String,
+    id: String,
+    revision: String,
+    confirmed: bool,
+    lock_epoch: String,
+) -> Result<Vec<SecretSummary>, BrokerError> {
+    authorize(&window)?;
+    if !confirmed {
+        return Err(BrokerError::InvalidSecret);
+    }
+    let environment = environment
+        .parse()
+        .map_err(|_| BrokerError::InvalidSecret)?;
+    match secret_operation(
+        Arc::clone(&broker),
+        SecretCommand::Delete {
+            project_id,
+            environment,
+            id,
+            revision,
+        },
+        lock_epoch,
+    )
+    .await?
+    {
+        SecretResult::List(items) => Ok(items),
+        SecretResult::Revealed(_) => Err(BrokerError::InvalidState),
+    }
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn secret_reveal(
+    window: tauri::WebviewWindow,
+    broker: tauri::State<'_, Arc<Broker>>,
+    project_id: String,
+    environment: String,
+    id: String,
+    revision: String,
+    confirmed: bool,
+    lock_epoch: String,
+) -> Result<RevealedSecret, BrokerError> {
+    authorize(&window)?;
+    if !confirmed {
+        return Err(BrokerError::InvalidSecret);
+    }
+    let environment = environment
+        .parse()
+        .map_err(|_| BrokerError::InvalidSecret)?;
+    match secret_operation(
+        Arc::clone(&broker),
+        SecretCommand::Reveal {
+            project_id,
+            environment,
+            id,
+            revision,
+        },
+        lock_epoch,
+    )
+    .await?
+    {
+        SecretResult::Revealed(value) => Ok(value),
+        SecretResult::List(_) => Err(BrokerError::InvalidState),
+    }
+}
+
 fn main() {
     if tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -263,7 +453,12 @@ fn main() {
             project_rename,
             project_delete,
             environment_create,
-            environment_delete
+            environment_delete,
+            secrets_list,
+            secret_create,
+            secret_update,
+            secret_delete,
+            secret_reveal
         ])
         .run(tauri::generate_context!())
         .is_err()

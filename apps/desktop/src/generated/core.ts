@@ -53,3 +53,24 @@ token: string,
  * Canonical path for explicit review.
  */
 directory: string, };
+export type SecretSummary = {
+/**
+ * Opaque lowercase hexadecimal identity.
+ */
+id: string,
+/**
+ * Environment variable name.
+ */
+name: string,
+/**
+ * Optional human-readable purpose.
+ */
+description: string,
+/**
+ * Validated labels for filtering and review.
+ */
+tags: Array<string>,
+/**
+ * Decimal revision for optimistic concurrency.
+ */
+revision: string, };

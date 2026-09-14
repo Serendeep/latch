@@ -23,7 +23,10 @@ import type {
   DirectorySelection,
   ProjectPage,
   Environment,
+  SecretSummary,
 } from "./generated/core";
+
+export type RevealedSecret = { id: string; revision: string; value: string };
 
 export function chooseProjectDirectory(
   lockEpoch: string,
@@ -71,5 +74,88 @@ export function changeEnvironment(
     revision,
     kind,
     confirmed: !add,
+  });
+}
+
+export function listSecrets(
+  lockEpoch: string,
+  projectId: string,
+  environment: Environment,
+): Promise<SecretSummary[]> {
+  return invoke("secrets_list", { lockEpoch, projectId, environment });
+}
+
+export function createSecret(
+  lockEpoch: string,
+  projectId: string,
+  environment: Environment,
+  input: {
+    name: string;
+    description: string;
+    tags: string[];
+    value: string;
+    allowEmpty: boolean;
+  },
+): Promise<SecretSummary[]> {
+  return invoke("secret_create", {
+    lockEpoch,
+    projectId,
+    environment,
+    ...input,
+  });
+}
+
+export function updateSecret(
+  lockEpoch: string,
+  projectId: string,
+  environment: Environment,
+  secret: SecretSummary,
+  input: {
+    name: string;
+    description: string;
+    tags: string[];
+    value: string | null;
+    allowEmpty: boolean;
+  },
+): Promise<SecretSummary[]> {
+  return invoke("secret_update", {
+    lockEpoch,
+    projectId,
+    environment,
+    id: secret.id,
+    revision: secret.revision,
+    ...input,
+  });
+}
+
+export function deleteSecret(
+  lockEpoch: string,
+  projectId: string,
+  environment: Environment,
+  secret: SecretSummary,
+): Promise<SecretSummary[]> {
+  return invoke("secret_delete", {
+    lockEpoch,
+    projectId,
+    environment,
+    id: secret.id,
+    revision: secret.revision,
+    confirmed: true,
+  });
+}
+
+export function revealSecret(
+  lockEpoch: string,
+  projectId: string,
+  environment: Environment,
+  secret: SecretSummary,
+): Promise<RevealedSecret> {
+  return invoke("secret_reveal", {
+    lockEpoch,
+    projectId,
+    environment,
+    id: secret.id,
+    revision: secret.revision,
+    confirmed: true,
   });
 }

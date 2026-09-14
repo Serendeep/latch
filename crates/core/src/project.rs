@@ -246,7 +246,6 @@ pub struct DirectorySelection {
     pub directory: String,
 }
 
-#[cfg(target_os = "linux")]
 pub(crate) fn hex(id: &[u8; 16]) -> String {
     id.iter().map(|byte| format!("{byte:02x}")).collect()
 }

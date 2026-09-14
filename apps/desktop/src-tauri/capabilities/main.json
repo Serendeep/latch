@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main",
-  "description": "The local main window may manage its vault and project metadata through scoped commands.",
+  "description": "The local main window may manage its vault, scoped project metadata, and individual secrets.",
   "windows": ["main"],
   "permissions": [
     "allow-app-status",
@@ -14,6 +14,11 @@
     "allow-project-rename",
     "allow-project-delete",
     "allow-environment-create",
-    "allow-environment-delete"
+    "allow-environment-delete",
+    "allow-secrets-list",
+    "allow-secret-create",
+    "allow-secret-update",
+    "allow-secret-delete",
+    "allow-secret-reveal"
   ]
 }

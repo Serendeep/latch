@@ -25,6 +25,33 @@ pub enum SecretError {
     ReservationFailed,
 }
 
+/// Secret metadata returned for one selected project environment. Never contains a value.
+#[derive(Serialize)]
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS))]
+pub struct SecretSummary {
+    /// Opaque lowercase hexadecimal identity.
+    pub id: String,
+    /// Environment variable name.
+    pub name: String,
+    /// Optional human-readable purpose.
+    pub description: String,
+    /// Validated labels for filtering and review.
+    pub tags: Vec<String>,
+    /// Decimal revision for optimistic concurrency.
+    pub revision: String,
+}
+
+/// One deliberately revealed value. This response must never be logged or retained.
+#[derive(Serialize)]
+pub struct RevealedSecret {
+    /// Opaque secret identity used to reject stale UI responses.
+    pub id: String,
+    /// Decimal revision that was authenticated and audited.
+    pub revision: String,
+    /// Plaintext value for this item only.
+    pub value: Zeroizing<String>,
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Metadata {
@@ -86,6 +113,16 @@ impl SecretMetadata {
     /// Borrow tags without copying sensitive metadata.
     pub fn tags(&self) -> impl Iterator<Item = &str> {
         self.0.tags.iter().map(|tag| tag.as_str())
+    }
+
+    pub(crate) fn summary(&self, id: &[u8; 16], revision: i64) -> SecretSummary {
+        SecretSummary {
+            id: crate::project::hex(id),
+            name: self.name().to_owned(),
+            description: self.description().to_owned(),
+            tags: self.tags().map(str::to_owned).collect(),
+            revision: revision.to_string(),
+        }
     }
 
     fn encode(&self) -> Result<Zeroizing<Vec<u8>>, SecretError> {
@@ -158,20 +195,23 @@ impl SecretScope {
     }
 }
 
-struct Field {
-    envelope: [u8; 16],
-    nonce: [u8; 24],
-    ciphertext: Vec<u8>,
+pub(crate) struct Field {
+    pub envelope: [u8; 16],
+    pub nonce: [u8; 24],
+    pub ciphertext: Vec<u8>,
 }
 
 /// Two independently encrypted fields sharing one reviewed ownership/revision.
 /// Ciphertext remains in Rust; listing metadata never opens the value field.
 pub struct SealedSecret {
-    metadata: Field,
-    value: Field,
+    pub(crate) metadata: Field,
+    pub(crate) value: Field,
 }
 
 impl SealedSecret {
+    pub(crate) fn from_fields(metadata: Field, value: Field) -> Self {
+        Self { metadata, value }
+    }
     /// Consume plaintext and reserve each nonce durably before using it.
     ///
     /// The callback receives the actual vault-key ID and CSPRNG nonce. It must

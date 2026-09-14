@@ -13,6 +13,11 @@ fn main() {
             "project_delete",
             "environment_create",
             "environment_delete",
+            "secrets_list",
+            "secret_create",
+            "secret_update",
+            "secret_delete",
+            "secret_reveal",
         ]),
     ))
     .expect("Could not build desktop configuration");

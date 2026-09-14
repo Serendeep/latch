@@ -3,6 +3,7 @@ use latch_core::{
     AppStatus, VaultAvailability,
     project::{DirectorySelection, ProjectPage, ProjectSummary},
     protocol::Environment,
+    secret::SecretSummary,
 };
 use std::{fs, path::PathBuf};
 use ts_rs::TS;
@@ -19,6 +20,7 @@ fn main() {
             ProjectSummary::decl(&config),
             ProjectPage::decl(&config),
             DirectorySelection::decl(&config),
+            SecretSummary::decl(&config),
         ]
         .iter()
         .map(|decl| format!("export {decl}\n"))

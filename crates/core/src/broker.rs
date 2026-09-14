@@ -15,6 +15,12 @@ pub enum BrokerError {
     ProjectExists,
     /// The vault already contains 100 projects.
     ProjectLimit,
+    /// Secret input or scope failed validation.
+    InvalidSecret,
+    /// A secret with this name already exists in the selected environment.
+    SecretExists,
+    /// The selected environment already contains 256 secrets.
+    SecretLimit,
     /// This platform has not been qualified for vault storage.
     Unsupported,
     /// A request cannot be accepted while work is in progress.
@@ -48,6 +54,17 @@ impl From<crate::project::ProjectError> for BrokerError {
             }
             ProjectError::RandomUnavailable => Self::StorageUnavailable,
             _ => Self::InvalidProject,
+        }
+    }
+}
+
+impl From<crate::secret::SecretError> for BrokerError {
+    fn from(error: crate::secret::SecretError) -> Self {
+        match error {
+            crate::secret::SecretError::InvalidInput => Self::InvalidSecret,
+            crate::secret::SecretError::ReservationFailed => Self::StorageUnavailable,
+            crate::secret::SecretError::InvalidRecord
+            | crate::secret::SecretError::CryptoUnavailable => Self::StorageUnavailable,
         }
     }
 }
@@ -94,6 +111,86 @@ pub enum ProjectCommand {
         /// True to recreate a missing kind.
         add: bool,
     },
+}
+
+/// Typed secret operations constructed by narrowly scoped desktop commands.
+/// The enum is intentionally not deserializable and has no Debug implementation.
+pub enum SecretCommand {
+    /// List metadata for exactly one project environment.
+    List {
+        /// Opaque project identity.
+        project_id: String,
+        /// Explicit environment kind.
+        environment: protocol::Environment,
+    },
+    /// Create one secret; the value is consumed by Rust.
+    Create {
+        /// Opaque project identity.
+        project_id: String,
+        /// Explicit environment kind.
+        environment: protocol::Environment,
+        /// Environment variable name.
+        name: String,
+        /// Optional purpose.
+        description: String,
+        /// Validated labels.
+        tags: Vec<String>,
+        /// Plaintext value crossing IPC once.
+        value: String,
+        /// Explicit confirmation that an empty value is intended.
+        allow_empty: bool,
+    },
+    /// Replace metadata and optionally the value at an expected revision.
+    Update {
+        /// Opaque project identity.
+        project_id: String,
+        /// Explicit environment kind.
+        environment: protocol::Environment,
+        /// Opaque secret identity.
+        id: String,
+        /// Expected decimal revision.
+        revision: String,
+        /// Environment variable name.
+        name: String,
+        /// Optional purpose.
+        description: String,
+        /// Validated labels.
+        tags: Vec<String>,
+        /// Replacement value, or none to preserve the authenticated current value.
+        value: Option<String>,
+        /// Explicit confirmation that an empty replacement is intended.
+        allow_empty: bool,
+    },
+    /// Delete one reviewed secret.
+    Delete {
+        /// Opaque project identity.
+        project_id: String,
+        /// Explicit environment kind.
+        environment: protocol::Environment,
+        /// Opaque secret identity.
+        id: String,
+        /// Expected decimal revision.
+        revision: String,
+    },
+    /// Reveal exactly one reviewed secret value.
+    Reveal {
+        /// Opaque project identity.
+        project_id: String,
+        /// Explicit environment kind.
+        environment: protocol::Environment,
+        /// Opaque secret identity.
+        id: String,
+        /// Expected decimal revision.
+        revision: String,
+    },
+}
+
+/// Internal result separated by operation so a list can never contain a value.
+pub enum SecretResult {
+    /// Metadata-only list.
+    List(Vec<crate::secret::SecretSummary>),
+    /// One deliberately revealed value.
+    Revealed(crate::secret::RevealedSecret),
 }
 
 impl From<std::io::Error> for BrokerError {
@@ -233,6 +330,81 @@ impl Broker {
         }
     }
 
+    /// Execute one scoped secret operation. Values are accepted or returned one item at a time.
+    pub fn secrets(
+        &self,
+        command: SecretCommand,
+        epoch: String,
+    ) -> Result<SecretResult, BrokerError> {
+        let bounded_metadata = |name: &str, description: &str, tags: &[String]| {
+            name.len() <= 512
+                && description.len() <= 8192
+                && tags.len() <= 16
+                && tags.iter().all(|tag| tag.len() <= 256)
+        };
+        match &command {
+            SecretCommand::List { project_id, .. } | SecretCommand::Create { project_id, .. } => {
+                crate::project::parse_id(project_id)?;
+            }
+            SecretCommand::Update {
+                project_id,
+                id,
+                revision,
+                ..
+            }
+            | SecretCommand::Delete {
+                project_id,
+                id,
+                revision,
+                ..
+            }
+            | SecretCommand::Reveal {
+                project_id,
+                id,
+                revision,
+                ..
+            } => {
+                crate::project::parse_id(project_id)?;
+                crate::project::parse_id(id)?;
+                if revision.len() > 19 {
+                    return Err(BrokerError::InvalidSecret);
+                }
+            }
+        }
+        match &command {
+            SecretCommand::Create {
+                name,
+                description,
+                tags,
+                value,
+                ..
+            } if !bounded_metadata(name, description, tags) || value.len() > 65536 => {
+                return Err(BrokerError::InvalidSecret);
+            }
+            SecretCommand::Update {
+                name,
+                description,
+                tags,
+                value,
+                ..
+            } if !bounded_metadata(name, description, tags)
+                || value.as_ref().is_some_and(|value| value.len() > 65536) =>
+            {
+                return Err(BrokerError::InvalidSecret);
+            }
+            _ => {}
+        }
+        #[cfg(target_os = "linux")]
+        {
+            self.inner.secrets(command, epoch)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (command, epoch);
+            Err(BrokerError::Unsupported)
+        }
+    }
+
     /// Drop the live key and invalidate pending work immediately, even on disk failure.
     pub fn lock(&self) -> Result<AppStatus, BrokerError> {
         #[cfg(target_os = "linux")]
@@ -253,6 +425,8 @@ mod linux {
         keystore::KeyStore,
         project::{DirectorySelection, Project, ProjectPage, hex, parse_id, random_id},
         project_store::ProjectRow,
+        secret::{RevealedSecret, SealedSecret, SecretMetadata, SecretScope, SecretValue},
+        secret_store::SecretRow,
         storage::{Database, now_ms},
         vault::{PreparedVault, UnlockTicket, VaultSession},
     };
@@ -296,6 +470,11 @@ mod linux {
             command: ProjectCommand,
             epoch: u64,
             reply: SyncSender<Result<ProjectPage, BrokerError>>,
+        },
+        Secrets {
+            command: SecretCommand,
+            epoch: u64,
+            reply: SyncSender<Result<SecretResult, BrokerError>>,
         },
     }
     pub(super) struct Handle {
@@ -500,6 +679,53 @@ mod linux {
             result
         }
 
+        pub(super) fn secrets(
+            &self,
+            command: SecretCommand,
+            epoch: String,
+        ) -> Result<SecretResult, BrokerError> {
+            let epoch = parse_epoch(&epoch)?;
+            if self
+                .busy
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+            {
+                return Err(BrokerError::Busy);
+            }
+            let result = (|| {
+                check_project_state(
+                    &mut *self
+                        .state
+                        .lock()
+                        .map_err(|_| BrokerError::StorageUnavailable)?,
+                    epoch,
+                )?;
+                let (reply, receive) = mpsc::sync_channel(1);
+                self.sender
+                    .as_ref()
+                    .ok_or(BrokerError::StorageUnavailable)?
+                    .try_send(Work::Secrets {
+                        command,
+                        epoch,
+                        reply,
+                    })
+                    .map_err(|_| BrokerError::Busy)?;
+                let result = receive
+                    .recv()
+                    .map_err(|_| BrokerError::StorageUnavailable)??;
+                check_project_state(
+                    &mut *self
+                        .state
+                        .lock()
+                        .map_err(|_| BrokerError::StorageUnavailable)?,
+                    epoch,
+                )?;
+                Ok(result)
+            })();
+            self.busy.store(false, Ordering::Release);
+            result
+        }
+
         pub(super) fn lock(&self) -> Result<AppStatus, BrokerError> {
             {
                 let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -588,6 +814,23 @@ mod linux {
                     reply,
                 } => {
                     let result = operate_projects(&mut db, &state, command, epoch);
+                    if matches!(
+                        result,
+                        Err(BrokerError::AuditUnavailable | BrokerError::StorageUnavailable)
+                    ) {
+                        let mut shared = state.lock().unwrap_or_else(|e| e.into_inner());
+                        shared.failure = result.as_ref().err().copied();
+                        shared.session.lock();
+                        shared.selection = None;
+                    }
+                    let _ = reply.send(result);
+                }
+                Work::Secrets {
+                    command,
+                    epoch,
+                    reply,
+                } => {
+                    let result = operate_secrets(&mut db, &state, command, epoch);
                     if matches!(
                         result,
                         Err(BrokerError::AuditUnavailable | BrokerError::StorageUnavailable)
@@ -847,6 +1090,272 @@ mod linux {
             projects: vec![project.summary()],
             next_cursor: None,
         })
+    }
+
+    fn project_environment(
+        db: &Database,
+        state: &Mutex<Shared>,
+        epoch: u64,
+        project_id: [u8; 16],
+        kind: protocol::Environment,
+    ) -> Result<[u8; 16], BrokerError> {
+        let rows = db.project_rows(None, 101)?;
+        if rows.len() > 100 {
+            return Err(BrokerError::StorageUnavailable);
+        }
+        let row = rows
+            .into_iter()
+            .find(|row| row.id == project_id)
+            .ok_or(BrokerError::InvalidSecret)?;
+        let mut shared = state.lock().map_err(|_| BrokerError::StorageUnavailable)?;
+        check_project_state(&mut shared, epoch)?;
+        let key = shared.session.key().ok_or(BrokerError::Cancelled)?;
+        if key.key_id() != &row.key_id {
+            return Err(BrokerError::StorageUnavailable);
+        }
+        let mut bytes = zeroize::Zeroizing::new(row.ciphertext);
+        key.record(false, &row.id, row.revision, &row.nonce, &mut bytes)
+            .map_err(|_| BrokerError::StorageUnavailable)?;
+        let project = Project::decode(row.id, row.revision, &bytes)
+            .map_err(|_| BrokerError::StorageUnavailable)?;
+        project
+            .environments()
+            .iter()
+            .find(|environment| environment.kind() == kind)
+            .map(|environment| *environment.id())
+            .ok_or(BrokerError::InvalidSecret)
+    }
+
+    fn parse_revision(value: &str) -> Result<i64, BrokerError> {
+        if value.is_empty()
+            || value.len() > 19
+            || value.starts_with('0')
+            || !value.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return Err(BrokerError::RevisionConflict);
+        }
+        value.parse().map_err(|_| BrokerError::RevisionConflict)
+    }
+
+    fn list_secrets(
+        db: &Database,
+        state: &Mutex<Shared>,
+        epoch: u64,
+        project_id: [u8; 16],
+        environment_id: [u8; 16],
+    ) -> Result<Vec<crate::secret::SecretSummary>, BrokerError> {
+        let rows = db.secret_metadata_rows(&project_id, &environment_id)?;
+        let mut summaries = Vec::with_capacity(rows.len());
+        for row in rows {
+            let mut shared = state.lock().map_err(|_| BrokerError::StorageUnavailable)?;
+            check_project_state(&mut shared, epoch)?;
+            let key = shared.session.key().ok_or(BrokerError::Cancelled)?;
+            if key.key_id() != &row.key_id {
+                return Err(BrokerError::StorageUnavailable);
+            }
+            let scope = SecretScope::new(row.project_id, row.environment_id, row.id, row.revision)?;
+            summaries.push(
+                row.sealed
+                    .open_metadata(key, scope)?
+                    .summary(&row.id, row.revision),
+            );
+        }
+        summaries.sort_by(|left, right| left.name.cmp(&right.name));
+        Ok(summaries)
+    }
+
+    fn operate_secrets(
+        db: &mut Database,
+        state: &Mutex<Shared>,
+        command: SecretCommand,
+        epoch: u64,
+    ) -> Result<SecretResult, BrokerError> {
+        let (project_text, kind) = match &command {
+            SecretCommand::List {
+                project_id,
+                environment,
+            }
+            | SecretCommand::Create {
+                project_id,
+                environment,
+                ..
+            }
+            | SecretCommand::Update {
+                project_id,
+                environment,
+                ..
+            }
+            | SecretCommand::Delete {
+                project_id,
+                environment,
+                ..
+            }
+            | SecretCommand::Reveal {
+                project_id,
+                environment,
+                ..
+            } => (project_id, *environment),
+        };
+        let project_id = parse_id(project_text)?;
+        let environment_id = project_environment(db, state, epoch, project_id, kind)?;
+
+        if matches!(command, SecretCommand::List { .. }) {
+            return Ok(SecretResult::List(list_secrets(
+                db,
+                state,
+                epoch,
+                project_id,
+                environment_id,
+            )?));
+        }
+
+        if let SecretCommand::Reveal { id, revision, .. } = command {
+            let id = parse_id(&id)?;
+            let revision = parse_revision(&revision)?;
+            let row = db
+                .secret_row(&project_id, &environment_id, &id)?
+                .ok_or(BrokerError::RevisionConflict)?;
+            if row.revision != revision {
+                return Err(BrokerError::RevisionConflict);
+            }
+            let mut shared = state.lock().map_err(|_| BrokerError::StorageUnavailable)?;
+            check_project_state(&mut shared, epoch)?;
+            let key = shared.session.key().ok_or(BrokerError::Cancelled)?;
+            if key.key_id() != &row.key_id {
+                return Err(BrokerError::StorageUnavailable);
+            }
+            let scope = SecretScope::new(project_id, environment_id, id, revision)?;
+            row.sealed.open_metadata(key, scope)?;
+            let value = row.sealed.open_value(key, scope)?;
+            db.audit_reveal(&project_id, &environment_id, &id)?;
+            return Ok(SecretResult::Revealed(RevealedSecret {
+                id: hex(&id),
+                revision: revision.to_string(),
+                value: zeroize::Zeroizing::new(value.expose().to_owned()),
+            }));
+        }
+
+        if let SecretCommand::Delete { id, revision, .. } = command {
+            let id = parse_id(&id)?;
+            let revision = parse_revision(&revision)?;
+            let mut shared = state.lock().map_err(|_| BrokerError::StorageUnavailable)?;
+            check_project_state(&mut shared, epoch)?;
+            db.delete_secret(&project_id, &environment_id, &id, revision)?;
+            drop(shared);
+            return Ok(SecretResult::List(list_secrets(
+                db,
+                state,
+                epoch,
+                project_id,
+                environment_id,
+            )?));
+        }
+
+        let rows = db.secret_metadata_rows(&project_id, &environment_id)?;
+        let (id, previous, name, description, tags, value) = match command {
+            SecretCommand::Create {
+                name,
+                description,
+                tags,
+                value,
+                allow_empty,
+                ..
+            } => (
+                random_id()?,
+                None,
+                name,
+                description,
+                tags,
+                SecretValue::new(value, allow_empty)?,
+            ),
+            SecretCommand::Update {
+                id,
+                revision,
+                name,
+                description,
+                tags,
+                value,
+                allow_empty,
+                ..
+            } => {
+                let id = parse_id(&id)?;
+                let previous = parse_revision(&revision)?;
+                let row = db
+                    .secret_row(&project_id, &environment_id, &id)?
+                    .ok_or(BrokerError::RevisionConflict)?;
+                if row.revision != previous {
+                    return Err(BrokerError::RevisionConflict);
+                }
+                let value = match value {
+                    Some(value) => SecretValue::new(value, allow_empty)?,
+                    None => {
+                        let mut shared =
+                            state.lock().map_err(|_| BrokerError::StorageUnavailable)?;
+                        check_project_state(&mut shared, epoch)?;
+                        let key = shared.session.key().ok_or(BrokerError::Cancelled)?;
+                        if key.key_id() != &row.key_id {
+                            return Err(BrokerError::StorageUnavailable);
+                        }
+                        let scope = SecretScope::new(project_id, environment_id, id, previous)?;
+                        row.sealed.open_metadata(key, scope)?;
+                        row.sealed.open_value(key, scope)?
+                    }
+                };
+                (id, Some(previous), name, description, tags, value)
+            }
+            _ => return Err(BrokerError::InvalidSecret),
+        };
+        let metadata = SecretMetadata::new(name, description, tags)?;
+        for row in rows {
+            if row.id == id {
+                continue;
+            }
+            let mut shared = state.lock().map_err(|_| BrokerError::StorageUnavailable)?;
+            check_project_state(&mut shared, epoch)?;
+            let key = shared.session.key().ok_or(BrokerError::Cancelled)?;
+            if key.key_id() != &row.key_id {
+                return Err(BrokerError::StorageUnavailable);
+            }
+            let scope = SecretScope::new(project_id, environment_id, row.id, row.revision)?;
+            if row
+                .sealed
+                .open_metadata(key, scope)?
+                .name()
+                .eq_ignore_ascii_case(metadata.name())
+            {
+                return Err(BrokerError::SecretExists);
+            }
+        }
+        let revision = previous
+            .map_or(Some(1), |value| value.checked_add(1))
+            .ok_or(BrokerError::RevisionConflict)?;
+        let scope = SecretScope::new(project_id, environment_id, id, revision)?;
+        let mut shared = state.lock().map_err(|_| BrokerError::StorageUnavailable)?;
+        check_project_state(&mut shared, epoch)?;
+        let key = shared.session.key().ok_or(BrokerError::Cancelled)?;
+        let key_id = *key.key_id();
+        let sealed = SealedSecret::seal(key, scope, metadata, value, |key, nonce| {
+            db.reserve_record(key, nonce)
+                .map_err(|_| crate::secret::SecretError::ReservationFailed)
+        })?;
+        let row = SecretRow {
+            id,
+            project_id,
+            environment_id,
+            revision,
+            key_id,
+            sealed,
+        };
+        check_project_state(&mut shared, epoch)?;
+        db.save_secret(&row, previous)?;
+        drop(shared);
+        Ok(SecretResult::List(list_secrets(
+            db,
+            state,
+            epoch,
+            project_id,
+            environment_id,
+        )?))
     }
 
     fn operate(
@@ -1131,6 +1640,100 @@ mod tests {
                 epoch.clone(),
             )
             .unwrap();
+        let secret_value = password();
+        let created = broker
+            .secrets(
+                SecretCommand::Create {
+                    project_id: project_id.clone(),
+                    environment: protocol::Environment::Development,
+                    name: "SERVICE_TOKEN".into(),
+                    description: "Generated test credential".into(),
+                    tags: vec!["local".into()],
+                    value: secret_value.to_string(),
+                    allow_empty: false,
+                },
+                epoch.clone(),
+            )
+            .unwrap();
+        let SecretResult::List(secrets) = created else {
+            panic!("create returned a value")
+        };
+        assert!(secrets.len() == 1 && secrets[0].name == "SERVICE_TOKEN");
+        let secret_id = secrets[0].id.clone();
+        assert!(matches!(
+            broker.secrets(
+                SecretCommand::Create {
+                    project_id: project_id.clone(),
+                    environment: protocol::Environment::Development,
+                    name: "service_token".into(),
+                    description: String::new(),
+                    tags: vec![],
+                    value: password().to_string(),
+                    allow_empty: false,
+                },
+                epoch.clone(),
+            ),
+            Err(BrokerError::SecretExists)
+        ));
+        let updated = broker
+            .secrets(
+                SecretCommand::Update {
+                    project_id: project_id.clone(),
+                    environment: protocol::Environment::Development,
+                    id: secret_id.clone(),
+                    revision: "1".into(),
+                    name: "SERVICE_TOKEN".into(),
+                    description: "Preserved value".into(),
+                    tags: vec!["local".into()],
+                    value: None,
+                    allow_empty: false,
+                },
+                epoch.clone(),
+            )
+            .unwrap();
+        let SecretResult::List(secrets) = updated else {
+            panic!("update returned a value")
+        };
+        assert!(secrets[0].revision == "2" && secrets[0].description == "Preserved value");
+        let revealed = broker
+            .secrets(
+                SecretCommand::Reveal {
+                    project_id: project_id.clone(),
+                    environment: protocol::Environment::Development,
+                    id: secret_id.clone(),
+                    revision: "2".into(),
+                },
+                epoch.clone(),
+            )
+            .unwrap();
+        let SecretResult::Revealed(revealed) = revealed else {
+            panic!("reveal returned metadata")
+        };
+        assert!(revealed.value.as_str() == secret_value.as_str());
+        assert!(matches!(
+            broker.secrets(
+                SecretCommand::Delete {
+                    project_id: project_id.clone(),
+                    environment: protocol::Environment::Development,
+                    id: secret_id.clone(),
+                    revision: "1".into(),
+                },
+                epoch.clone(),
+            ),
+            Err(BrokerError::RevisionConflict)
+        ));
+        let deleted = broker
+            .secrets(
+                SecretCommand::Delete {
+                    project_id: project_id.clone(),
+                    environment: protocol::Environment::Development,
+                    id: secret_id,
+                    revision: "2".into(),
+                },
+                epoch.clone(),
+            )
+            .unwrap();
+        assert!(matches!(deleted, SecretResult::List(items) if items.is_empty()));
         let mut extra_projects = Vec::new();
         for index in 0..99 {
             let path = project_dir.path().join(index.to_string());
@@ -1283,10 +1886,25 @@ mod tests {
             .query_row("SELECT count(*) FROM audit_events", [], |r| r.get(0))
             .expect("audit read failed");
         assert!(count >= 7, "audit events missing");
+        let secret_events: i64 = db
+            .connection
+            .query_row(
+                "SELECT count(*) FROM audit_events WHERE operation BETWEEN 9 AND 12",
+                [],
+                |row| row.get(0),
+            )
+            .expect("secret audit read failed");
+        assert!(secret_events == 4, "secret audit events missing");
         let bytes = std::fs::read(dir.path().join("vault.sqlite3")).expect("database read failed");
         assert!(
             !bytes.windows(input.len()).any(|b| b == input.as_bytes()),
             "plaintext passphrase persisted"
+        );
+        assert!(
+            !bytes
+                .windows(secret_value.len())
+                .any(|bytes| bytes == secret_value.as_bytes()),
+            "plaintext secret persisted"
         );
         let device = KeyStore::connect()
             .expect("store failed")
