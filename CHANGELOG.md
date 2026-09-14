@@ -6,9 +6,9 @@ Notable changes to Latch are recorded here. No public release has been published
 
 ### Added
 
-- Secret ciphertext schema migration and transactional cleanup on project/environment deletion. Secret entry and disclosure are still disabled.
-
-- Rust secret-input validation and separate authenticated metadata/value records, with tamper and nonce-reservation tests. Desktop secret management is not enabled yet.
+- Linux secret create, metadata-only listing, metadata/value updates, confirmed deletion, and deliberate one-record reveal through narrow Tauri commands.
+- Separate authenticated metadata/value encryption, ciphertext-only SQLite records, optimistic revisions, scoped uniqueness and capacity checks, and atomic metadata-only audit events.
+- A compact environment workspace with concealed values, entry and deletion dialogs, light/dark themes, keyboard behavior, and WCAG AA checks.
 
 - Linux project creation through a native directory picker, encrypted project metadata, renaming, and confirmed project/environment deletion and environment recreation.
 - Atomic metadata/audit writes, schema migration, bounded project pages, single-use directory selections, and stale-session rejection.
@@ -26,5 +26,5 @@ Notable changes to Latch are recorded here. No public release has been published
 ### Not yet available
 
 - macOS and Windows vault operations pending credential-store qualification.
-- Secret entry, approval, and process injection.
+- Clipboard copy with timed clearing, agent approval, and process injection.
 - Agent integrations, audit archives, and portable backups.
