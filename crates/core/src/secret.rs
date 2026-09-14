@@ -115,6 +115,7 @@ impl SecretMetadata {
         self.0.tags.iter().map(|tag| tag.as_str())
     }
 
+    #[cfg(target_os = "linux")]
     pub(crate) fn summary(&self, id: &[u8; 16], revision: i64) -> SecretSummary {
         SecretSummary {
             id: crate::project::hex(id),
@@ -209,6 +210,7 @@ pub struct SealedSecret {
 }
 
 impl SealedSecret {
+    #[cfg(target_os = "linux")]
     pub(crate) fn from_fields(metadata: Field, value: Field) -> Self {
         Self { metadata, value }
     }
