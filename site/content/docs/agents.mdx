@@ -4,6 +4,23 @@ title: "Coding agents and the CLI"
 
 Agents that support skills can use [the Latch skill](https://github.com/Serendeep/latch/blob/main/integrations/latch/SKILL.md). Other agents can call the CLI directly. Codex, Claude Code, and other tools use the same interface.
 
+## Install the skill
+
+Install Latch for your user account and choose from the compatible agents found on your machine:
+
+```sh
+pnpm dlx skills add Serendeep/latch --skill latch --global
+```
+
+To install it for Codex and Claude Code without prompts:
+
+```sh
+pnpm dlx skills add Serendeep/latch --skill latch \
+  --agent codex claude-code --global --yes
+```
+
+Start a new agent session after installation. The skill tells the agent when and how to request named secrets; it contains no secret values. Review its [`SKILL.md`](https://github.com/Serendeep/latch/blob/main/integrations/latch/SKILL.md) before installing it.
+
 Register the project directory in the desktop app before requesting access. For a project whose server needs `GITHUB_TOKEN`:
 
 ```sh

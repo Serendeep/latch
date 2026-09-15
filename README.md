@@ -12,6 +12,14 @@ When an agent needs a key, it asks Latch to launch a command with that named sec
 
 Latch is open source and local only. It uses Tauri 2, React, TypeScript, Rust, and SQLite.
 
+## Install the agent skill
+
+```sh
+pnpm dlx skills add Serendeep/latch --skill latch --global
+```
+
+The installer detects Codex, Claude Code, and other compatible agents. Start a new agent session after installation. You can [review the complete skill](integrations/latch/SKILL.md) before installing it.
+
 ## Watch it work
 
 Codex connects a private issue dashboard. Claude adds an issue filter, and T3 Code adds title search. Each video follows the task through Latch approval to the running dashboard.

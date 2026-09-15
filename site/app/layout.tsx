@@ -6,6 +6,7 @@ export const metadata: Metadata = {
   description:
     "Set up Latch and give project commands access to named secrets through a local approval popup.",
   metadataBase: new URL("https://latch.serendeep.tech"),
+  icons: { icon: "/assets/latch.svg" },
 };
 export default function Layout({ children }: LayoutProps<"/">) {
   return (
