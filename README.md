@@ -18,7 +18,7 @@ Each video follows a different task in a small issue dashboard, from the agent's
 
 | Codex                                                                     | Claude Code                                                                                 | T3 Code                                                                         |
 | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| [![Codex demo](docs/assets/latch-codex.png)](docs/assets/latch-codex.mp4) | [![Claude Code demo](docs/assets/latch-claude-code.png)](docs/assets/latch-claude-code.mp4) | [![T3 Code demo](docs/assets/latch-t3-code.png)](docs/assets/latch-t3-code.mp4) |
+| [![Codex demo](docs/assets/latch-codex.png)](https://github.com/Serendeep/latch/raw/refs/heads/main/docs/assets/latch-codex.mp4) | [![Claude Code demo](docs/assets/latch-claude-code.png)](https://github.com/Serendeep/latch/raw/refs/heads/main/docs/assets/latch-claude-code.mp4) | [![T3 Code demo](docs/assets/latch-t3-code.png)](https://github.com/Serendeep/latch/raw/refs/heads/main/docs/assets/latch-t3-code.mp4) |
 
 The recordings use the actual agent applications, a local mock GitHub service, sample issues, and generated credentials. T3 Code uses its Codex provider. No real GitHub token or private repository appears in the videos.
 
