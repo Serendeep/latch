@@ -113,5 +113,6 @@ jobs:
       - name: Attach packages to the draft release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           TAG_NAME: ${{ needs.release-please.outputs.tag-name }}
         run: gh release upload "$TAG_NAME" release-assets/* --clobber
