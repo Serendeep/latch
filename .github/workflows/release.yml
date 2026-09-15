@@ -25,6 +25,22 @@ jobs:
     steps:
       - id: release
         uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        if: steps.release.outputs.prs_created == 'true'
+        with:
+          ref: ${{ fromJSON(steps.release.outputs.pr).headBranchName }}
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
+        if: steps.release.outputs.prs_created == 'true'
+      - name: Sync the Cargo lockfile
+        if: steps.release.outputs.prs_created == 'true'
+        run: |
+          cargo check
+          git add Cargo.lock
+          if git diff --cached --quiet; then exit 0; fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m "chore: update Cargo.lock for release"
+          git push
 
   package:
     if: needs.release-please.outputs.release-created == 'true'
