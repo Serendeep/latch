@@ -2,10 +2,9 @@
 
 ## [0.2.1](https://github.com/Serendeep/latch/compare/v0.2.0...v0.2.1) (2026-09-15)
 
-
 ### Bug Fixes
 
-* target repository when uploading releases ([f1d702b](https://github.com/Serendeep/latch/commit/f1d702b452db23ffc35e616c1ad6c47468a5fc6d))
+- target repository when uploading releases ([f1d702b](https://github.com/Serendeep/latch/commit/f1d702b452db23ffc35e616c1ad6c47468a5fc6d))
 
 ## [0.2.0](https://github.com/Serendeep/latch/compare/v0.1.0...v0.2.0) (2026-09-15)
 
