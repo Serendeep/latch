@@ -68,7 +68,7 @@ These UI previews use sample metadata and concealed values. Latch supports syste
 
 ## Documentation
 
-Read the [documentation](site/content/docs/index.mdx) for setup, agent integration, vault management, and the security model. The guides live alongside the code and are built as a separate website.
+Read the [documentation](https://latch.serendeep.tech/) for setup, agent integration, vault management, and the security model. The guides live alongside the code and are published with GitHub Pages.
 
 Approval controls which process receives a secret. **That process can read and leak it.** Latch does not sandbox approved commands.
 
