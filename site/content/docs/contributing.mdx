@@ -79,7 +79,9 @@ Internal phase plans, implementation reviews, ADR drafts, and local working note
 
 ## Releases
 
-Release automation will use [release-please](https://github.com/googleapis/release-please-action) once Latch reaches a releasable milestone. It will prepare version and changelog updates in release PRs. Packaging and signing will be connected when those platform requirements are ready. No release workflow is enabled for the current scaffold.
+The [release-please](https://github.com/googleapis/release-please-action) workflow maintains the version and changelog in a release PR. Merging that PR creates a draft GitHub release and builds the CLI and desktop packages on Linux, macOS, and Windows. Drafts must stay unpublished until their artifacts have passed platform testing and signing review.
+
+Build unsigned native packages locally with `pnpm desktop:bundle`. Use `pnpm desktop:bundle --bundles deb,appimage` for Linux. On Arch Linux, set `NO_STRIP=1` when linuxdeploy cannot process newer RELR sections. Signing, automatic updates, and CLI installation are not connected yet.
 
 Use Conventional Commit titles for new changes, such as `feat: add project selection`, `fix: reject invalid variable names`, and `docs: clarify setup`. This prepares the history for automated release notes. Do not create release tags or publish binaries before the release process is qualified.
 

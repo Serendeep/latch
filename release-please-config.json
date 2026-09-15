@@ -1,0 +1,29 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "rust",
+  "plugins": [
+    {
+      "type": "cargo-workspace",
+      "merge": false
+    }
+  ],
+  "packages": {
+    ".": {
+      "package-name": "latch",
+      "draft": true,
+      "force-tag-creation": true,
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "package.json",
+          "jsonpath": "$.version"
+        },
+        {
+          "type": "json",
+          "path": "apps/desktop/src-tauri/tauri.conf.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    }
+  }
+}
