@@ -13,6 +13,7 @@
     "build": "tsc --noEmit && vite build --config apps/desktop/vite.config.ts",
     "desktop:dev": "cd apps/desktop && tauri dev",
     "desktop:build": "cd apps/desktop && tauri build --no-bundle",
+    "desktop:bundle": "cd apps/desktop && tauri build",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint --deny-warnings .",
     "format": "prettier --write .",
