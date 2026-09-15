@@ -14,26 +14,26 @@ Latch is open source and local only. It uses Tauri 2, React, TypeScript, Rust, a
 
 ## Watch it work
 
-Each video follows a different task in a small issue dashboard, from the agent's request to the running application.
+Codex connects a private issue dashboard. Claude adds an issue filter, and T3 Code adds title search. Each video follows the task through Latch approval to the running dashboard.
 
 <details>
 <summary>Codex — connect the project</summary>
 
-https://github.com/user-attachments/assets/d923cc08-1467-4e2c-9d36-ffd98d2cbbd5
+https://github.com/user-attachments/assets/0bed94e9-1f2c-4d92-b1c3-9ed8e5f75f0e
 
 </details>
 
 <details>
 <summary>Claude Code — add an issue filter</summary>
 
-https://github.com/user-attachments/assets/5bffa0d5-38e6-4ed5-a057-a7a182f3bca4
+https://github.com/user-attachments/assets/40daf8bb-bf24-4d1e-807a-370767ffaf59
 
 </details>
 
 <details>
 <summary>T3 Code — add title search</summary>
 
-https://github.com/user-attachments/assets/e87405e9-661c-4757-9989-04f423a81cf2
+https://github.com/user-attachments/assets/02fb3286-3065-4e06-a763-c277a2339daa
 
 </details>
 
