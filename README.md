@@ -16,9 +16,26 @@ Latch is open source and local only. It uses Tauri 2, React, TypeScript, Rust, a
 
 Each video follows a different task in a small issue dashboard, from the agent's request to the running application.
 
-| Codex                                                                     | Claude Code                                                                                 | T3 Code                                                                         |
-| ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| [![Codex demo](docs/assets/latch-codex.png)](https://github.com/Serendeep/latch/raw/refs/heads/main/docs/assets/latch-codex.mp4) | [![Claude Code demo](docs/assets/latch-claude-code.png)](https://github.com/Serendeep/latch/raw/refs/heads/main/docs/assets/latch-claude-code.mp4) | [![T3 Code demo](docs/assets/latch-t3-code.png)](https://github.com/Serendeep/latch/raw/refs/heads/main/docs/assets/latch-t3-code.mp4) |
+<details>
+<summary>Codex — connect the project</summary>
+
+https://github.com/user-attachments/assets/d923cc08-1467-4e2c-9d36-ffd98d2cbbd5
+
+</details>
+
+<details>
+<summary>Claude Code — add an issue filter</summary>
+
+https://github.com/user-attachments/assets/5bffa0d5-38e6-4ed5-a057-a7a182f3bca4
+
+</details>
+
+<details>
+<summary>T3 Code — add title search</summary>
+
+https://github.com/user-attachments/assets/e87405e9-661c-4757-9989-04f423a81cf2
+
+</details>
 
 The recordings use the actual agent applications, a local mock GitHub service, sample issues, and generated credentials. T3 Code uses its Codex provider. No real GitHub token or private repository appears in the videos.
 
