@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.0
 
 - Create a local encrypted vault on Linux, protected by a separate passphrase and GNOME Keyring.
 - Manage projects, environments, and secrets. Reveal individual values or copy them with timed clipboard clearing.

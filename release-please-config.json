@@ -31,17 +31,7 @@
         {
           "type": "toml",
           "path": "Cargo.lock",
-          "jsonpath": "$.package[?(@.name=='latch-core')].version"
-        },
-        {
-          "type": "toml",
-          "path": "Cargo.lock",
-          "jsonpath": "$.package[?(@.name=='latch-cli')].version"
-        },
-        {
-          "type": "toml",
-          "path": "Cargo.lock",
-          "jsonpath": "$.package[?(@.name=='latch-desktop')].version"
+          "jsonpath": "$.package[?(@.name=='latch-core' || @.name=='latch-cli' || @.name=='latch-desktop')].version"
         },
         {
           "type": "json",
