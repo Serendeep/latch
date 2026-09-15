@@ -76,6 +76,10 @@ Approval controls which process receives a secret. **That process can read and l
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, checks, and contribution requirements, and [CHANGELOG.md](CHANGELOG.md) for changes. The [example configuration](examples/latch.example.toml) contains names only and is not loaded by the app.
 
+## Support
+
+If you want to support continued development, you can [buy me a coffee](https://buymeacoffee.com/serendeep).
+
 ## License
 
 [MIT](LICENSE).
