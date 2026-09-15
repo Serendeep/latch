@@ -29,7 +29,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         if: steps.release.outputs.prs_created == 'true'
         with:
-          ref: ${{ fromJSON(steps.release.outputs.pr).headBranchName }}
+          ref: release-please--branches--main--components--latch
       - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
         if: steps.release.outputs.prs_created == 'true'
       - name: Sync the Cargo lockfile
@@ -46,7 +46,7 @@ jobs:
         if: steps.release.outputs.prs_created == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_BRANCH: ${{ fromJSON(steps.release.outputs.pr).headBranchName }}
+          RELEASE_BRANCH: release-please--branches--main--components--latch
         run: |
           gh workflow run checks.yml --ref "$RELEASE_BRANCH"
           gh workflow run security.yml --ref "$RELEASE_BRANCH"
