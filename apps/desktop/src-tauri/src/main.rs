@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 use latch_core::{
     AppStatus,
+    audit::AuditPage,
     broker::{Broker, BrokerError, ProjectCommand, SecretCommand, SecretResult},
     import::FileReview,
     process::{LaunchReceipt, MissingSecretInput, PreparedRun, RunReview},
@@ -643,6 +644,22 @@ async fn projects_list(
 }
 
 #[tauri::command]
+async fn audit_events_list(
+    window: tauri::WebviewWindow,
+    broker: tauri::State<'_, Arc<Broker>>,
+    cursor: Option<String>,
+    lock_epoch: String,
+) -> Result<AuditPage, BrokerError> {
+    authorize(&window)?;
+    tauri::async_runtime::spawn_blocking({
+        let broker = Arc::clone(&broker);
+        move || broker.audit_events(cursor, lock_epoch)
+    })
+    .await
+    .map_err(|_| BrokerError::StorageUnavailable)?
+}
+
+#[tauri::command]
 async fn project_create(
     window: tauri::WebviewWindow,
     broker: tauri::State<'_, Arc<Broker>>,
@@ -1219,6 +1236,7 @@ fn main() {
             vault_lock,
             project_choose_directory,
             projects_list,
+            audit_events_list,
             project_create,
             project_rename,
             project_delete,

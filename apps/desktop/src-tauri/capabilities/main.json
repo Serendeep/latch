@@ -10,6 +10,7 @@
     "allow-vault-lock",
     "allow-project-choose-directory",
     "allow-projects-list",
+    "allow-audit-events-list",
     "allow-project-create",
     "allow-project-rename",
     "allow-project-delete",

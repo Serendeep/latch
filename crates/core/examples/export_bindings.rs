@@ -1,6 +1,7 @@
 //! Exports or checks the small metadata-only frontend contract.
 use latch_core::{
     AppStatus, VaultAvailability,
+    audit::{AuditEvent, AuditPage},
     import::FileReview,
     process::{LaunchReceipt, RunReview},
     project::{DirectorySelection, ProjectPage, ProjectSummary},
@@ -18,6 +19,8 @@ fn main() {
         + &[
             VaultAvailability::decl(&config),
             AppStatus::decl(&config),
+            AuditEvent::decl(&config),
+            AuditPage::decl(&config),
             Environment::decl(&config),
             AgentKind::decl(&config),
             ProjectSummary::decl(&config),

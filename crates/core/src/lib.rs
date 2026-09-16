@@ -1,5 +1,8 @@
 //! Shared request contracts and the desktop-owned local vault. No secret delivery yet.
 
+pub mod audit;
+#[cfg(target_os = "linux")]
+mod audit_store;
 pub mod broker;
 pub mod import;
 #[cfg(target_os = "linux")]

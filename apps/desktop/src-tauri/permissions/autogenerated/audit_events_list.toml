@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-audit-events-list"
+description = "Enables the audit_events_list command without any pre-configured scope."
+commands.allow = ["audit_events_list"]
+
+[[permission]]
+identifier = "deny-audit-events-list"
+description = "Denies the audit_events_list command without any pre-configured scope."
+commands.deny = ["audit_events_list"]

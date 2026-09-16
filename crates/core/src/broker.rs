@@ -377,6 +377,31 @@ impl Broker {
         }
     }
 
+    /// Read one newest-first page of allowlisted audit metadata.
+    pub fn audit_events(
+        &self,
+        cursor: Option<String>,
+        epoch: String,
+    ) -> Result<crate::audit::AuditPage, BrokerError> {
+        if cursor.as_ref().is_some_and(|value| {
+            value.is_empty()
+                || value.len() > 19
+                || !value.bytes().all(|byte| byte.is_ascii_digit())
+                || value == "0"
+        }) {
+            return Err(BrokerError::InvalidState);
+        }
+        #[cfg(target_os = "linux")]
+        {
+            self.inner.audit_events(cursor, epoch)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (cursor, epoch);
+            Err(BrokerError::Unsupported)
+        }
+    }
+
     /// Execute one scoped secret operation. Values are accepted or returned one item at a time.
     pub fn secrets(
         &self,
@@ -644,6 +669,11 @@ mod linux {
             epoch: u64,
             reply: SyncSender<Result<ProjectPage, BrokerError>>,
         },
+        AuditEvents {
+            cursor: Option<i64>,
+            epoch: u64,
+            reply: SyncSender<Result<crate::audit::AuditPage, BrokerError>>,
+        },
         Secrets {
             command: SecretCommand,
             epoch: u64,
@@ -874,6 +904,56 @@ mod linux {
                     epoch,
                 )?;
                 Ok(result)
+            })();
+            self.busy.store(false, Ordering::Release);
+            result
+        }
+
+        pub(super) fn audit_events(
+            &self,
+            cursor: Option<String>,
+            epoch: String,
+        ) -> Result<crate::audit::AuditPage, BrokerError> {
+            let epoch = parse_epoch(&epoch)?;
+            let cursor = cursor
+                .map(|value| value.parse::<i64>().map_err(|_| BrokerError::InvalidState))
+                .transpose()?;
+            if self
+                .busy
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+            {
+                return Err(BrokerError::Busy);
+            }
+            let result = (|| {
+                check_project_state(
+                    &mut *self
+                        .state
+                        .lock()
+                        .map_err(|_| BrokerError::StorageUnavailable)?,
+                    epoch,
+                )?;
+                let (reply, receive) = mpsc::sync_channel(1);
+                self.sender
+                    .as_ref()
+                    .ok_or(BrokerError::StorageUnavailable)?
+                    .try_send(Work::AuditEvents {
+                        cursor,
+                        epoch,
+                        reply,
+                    })
+                    .map_err(|_| BrokerError::Busy)?;
+                let page = receive
+                    .recv()
+                    .map_err(|_| BrokerError::StorageUnavailable)??;
+                check_project_state(
+                    &mut *self
+                        .state
+                        .lock()
+                        .map_err(|_| BrokerError::StorageUnavailable)?,
+                    epoch,
+                )?;
+                Ok(page)
             })();
             self.busy.store(false, Ordering::Release);
             result
@@ -1116,6 +1196,18 @@ mod linux {
                         shared.selection = None;
                         shared.import_review = None;
                     }
+                    let _ = reply.send(result);
+                }
+                Work::AuditEvents {
+                    cursor,
+                    epoch,
+                    reply,
+                } => {
+                    let result = check_project_state(
+                        &mut state.lock().unwrap_or_else(|error| error.into_inner()),
+                        epoch,
+                    )
+                    .and_then(|()| db.audit_events(cursor));
                     let _ = reply.send(result);
                 }
                 Work::Secrets {

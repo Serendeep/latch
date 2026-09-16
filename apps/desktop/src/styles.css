@@ -158,6 +158,21 @@ h1 {
 .projects-panel {
   margin-top: 1rem;
 }
+.manager-tabs {
+  display: flex;
+  gap: 0.35rem;
+  margin-top: 1rem;
+}
+.manager-tabs button {
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+}
+.manager-tabs button[aria-current="page"] {
+  border-color: var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+}
 .panel-header {
   min-height: 3.2rem;
   padding: 0.8rem 1.1rem;
@@ -435,6 +450,26 @@ button:disabled {
   margin-top: 0.2rem;
   color: var(--muted);
   font-size: 0.7rem;
+}
+.audit-table td:first-child {
+  width: auto;
+  white-space: nowrap;
+}
+.audit-details {
+  display: grid;
+  gap: 0.2rem;
+  margin: 0;
+}
+.audit-details div {
+  display: flex;
+  gap: 0.35rem;
+}
+.audit-details dt {
+  color: var(--faint);
+}
+.audit-details dd {
+  margin: 0;
+  font-family: ui-monospace, "SFMono-Regular", monospace;
 }
 .tag-list {
   display: flex;

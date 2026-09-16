@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import Projects from "./Projects";
+import AuditLog from "./AuditLog";
 import { changeVault, getAppStatus, lockVault } from "./api";
 
 import type { VaultAvailability } from "./generated/core";
@@ -7,6 +8,7 @@ type Status = VaultAvailability | "loading" | "error";
 type Theme = "system" | "light" | "dark";
 
 export default function App() {
+  const [section, setSection] = useState<"projects" | "audit">("projects");
   const [status, setStatus] = useState<Status>("loading");
   const [attempt, setAttempt] = useState(0);
   const [message, setMessage] = useState("");
@@ -235,7 +237,29 @@ export default function App() {
           </div>
         </section>
         {status === "unlocked" ? (
-          <Projects key={lockEpoch} epoch={lockEpoch} />
+          <>
+            <nav className="manager-tabs" aria-label="Vault sections">
+              <button
+                type="button"
+                aria-current={section === "projects" ? "page" : undefined}
+                onClick={() => setSection("projects")}
+              >
+                Projects
+              </button>
+              <button
+                type="button"
+                aria-current={section === "audit" ? "page" : undefined}
+                onClick={() => setSection("audit")}
+              >
+                Audit history
+              </button>
+            </nav>
+            {section === "projects" ? (
+              <Projects key={lockEpoch} epoch={lockEpoch} />
+            ) : (
+              <AuditLog key={lockEpoch} epoch={lockEpoch} />
+            )}
+          </>
         ) : null}
         <p className="scope-note">
           A command receiving a secret can read and share it. Approval controls

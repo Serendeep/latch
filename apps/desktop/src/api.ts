@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AppStatus } from "./generated/core";
+import type { AppStatus, AuditPage } from "./generated/core";
 
 /** Metadata only. Never log IPC arguments, results, or errors. */
 export function getAppStatus(): Promise<AppStatus> {
@@ -41,6 +41,13 @@ export function listProjects(
   cursor: string | null,
 ): Promise<ProjectPage> {
   return invoke("projects_list", { lockEpoch, cursor });
+}
+
+export function listAuditEvents(
+  lockEpoch: string,
+  cursor: string | null,
+): Promise<AuditPage> {
+  return invoke("audit_events_list", { lockEpoch, cursor });
 }
 export function createProject(
   lockEpoch: string,

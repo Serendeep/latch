@@ -12,6 +12,7 @@ fn main() {
             "vault_lock",
             "project_choose_directory",
             "projects_list",
+            "audit_events_list",
             "project_create",
             "project_rename",
             "project_delete",

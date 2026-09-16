@@ -13,6 +13,64 @@ lock_epoch: string,
  * Current state of the local vault.
  */
 vault: VaultAvailability, };
+export type AuditEvent = {
+/**
+ * Monotonic decimal event identity.
+ */
+sequence: string,
+/**
+ * Unix timestamp in decimal milliseconds.
+ */
+occurred_at_ms: string,
+/**
+ * Stable operation code defined by the database schema.
+ */
+operation: number,
+/**
+ * Stable outcome code defined by the database schema.
+ */
+result: number,
+/**
+ * Opaque request identity when the event concerns an agent request.
+ */
+request_id: string | null,
+/**
+ * Opaque child-process identity when the event concerns a launch.
+ */
+job_id: string | null,
+/**
+ * Opaque project identity when the operation has project scope.
+ */
+project_id: string | null,
+/**
+ * Opaque environment identity when the operation has environment scope.
+ */
+environment_id: string | null,
+/**
+ * Opaque secret identity when one named secret was involved.
+ */
+secret_id: string | null,
+/**
+ * Agent type claimed by the local requester.
+ */
+agent: AgentKind | null,
+/**
+ * OS-observed user identity for a local agent request.
+ */
+peer_uid: string | null,
+/**
+ * OS-observed process identity for a local agent request.
+ */
+peer_pid: string | null, };
+export type AuditPage = {
+/**
+ * At most fifty events ordered newest first.
+ */
+events: Array<AuditEvent>,
+/**
+ * Exclusive sequence cursor for the next older page.
+ */
+next_cursor: string | null, };
 export type Environment = "development" | "test" | "staging" | "production";
 export type AgentKind = "codex" | "claude-code" | "other";
 export type ProjectSummary = {

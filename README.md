@@ -59,7 +59,7 @@ You can currently:
 - Review agent requests, add missing secrets, and approve a single command launch.
 - Keep the app in the tray and unlock from the request popup.
 
-Latch records local audit metadata for vault operations, secret access, requests, decisions, and process exits. Audit browsing, weekly compressed archives with configurable retention, and portable encrypted backups are still planned. There are no signed releases or automatic updates yet.
+Latch records local audit metadata for vault operations, secret access, requests, decisions, and process exits. The unlocked desktop app shows this history in newest-first pages without secret values, commands, or executable paths. Weekly compressed archives with configurable retention and portable encrypted backups are still planned. There are no signed releases or automatic updates yet.
 
 ## The app
 
