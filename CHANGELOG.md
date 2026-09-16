@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.0](https://github.com/Serendeep/latch/compare/v0.2.1...v0.3.0) (2026-09-16)
+
+### Features
+
+- add audit history browser ([0f04f36](https://github.com/Serendeep/latch/commit/0f04f3620407ccd36b9394d2e1816974a61d7b9b))
+
 ## [0.2.1](https://github.com/Serendeep/latch/compare/v0.2.0...v0.2.1) (2026-09-15)
 
 ### Bug Fixes
