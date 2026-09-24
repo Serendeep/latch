@@ -36,7 +36,7 @@ Repeat `--secret` for each required name. Never pass values as arguments. The po
 
 Latch finds a bare command name such as `npm` using the requesting shell's `PATH`, and follows one `#!` interpreter hop, including the program an `env` line starts. The popup lists each file found and, when it is a link such as a version-manager shim, the file it links to. At launch Latch checks that none of those files changed, then runs the command with that same `PATH`, a small baseline environment, and only the requested secrets. It does not capture the child's input or output. Use `--shell` when intentionally requesting a shell or interpreter; arguments are still passed directly.
 
-The agent label is self-reported audit context, not proof of identity. Requests expire after five minutes. The CLI returns after launch; waiting for completion and cancelling a running job are not implemented.
+The agent label is self-reported audit context, not proof of identity. Requests expire after five minutes. The CLI returns after launch; waiting for completion and cancelling a single job are not implemented. Quitting Latch stops every command it launched.
 
 ## When a request fails
 

@@ -1155,7 +1155,16 @@ fn main() {
                         let clipboard = app.state::<Arc<ClipboardState>>();
                         clipboard.clear_if_owned(None);
                         if event.id.as_ref() == "quit" {
-                            app.exit(0);
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.hide();
+                            }
+                            // Stopping jobs can take seconds; keep the tray responsive meanwhile.
+                            let broker = Arc::clone(&broker);
+                            let app = app.clone();
+                            std::thread::spawn(move || {
+                                broker.stop_jobs();
+                                app.exit(0);
+                            });
                         }
                     }
                     _ => {}

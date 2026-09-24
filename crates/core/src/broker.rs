@@ -1,7 +1,7 @@
 //! Desktop-owned worker. Blocking storage/KDF calls never hold the session lock.
 use crate::{AppStatus, VaultAvailability, protocol, vault::Passphrase};
 use serde::Serialize;
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
 
 /// Fixed public error codes. Source errors are deliberately discarded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -623,6 +623,21 @@ impl Broker {
         }
     }
 
+    /// Stop every running launched job (SIGTERM, then SIGKILL after five seconds) and wait until
+    /// their exits are audited. Called on explicit Quit.
+    pub fn stop_jobs(&self) {
+        self.stop_jobs_after(Duration::from_secs(5));
+    }
+
+    pub(crate) fn stop_jobs_after(&self, grace: Duration) {
+        #[cfg(unix)]
+        if let Some(worker) = &self.inner {
+            worker.stop_jobs(grace);
+        }
+        #[cfg(not(unix))]
+        let _ = grace;
+    }
+
     /// Drop the live key and invalidate pending work immediately, even on disk failure.
     pub fn lock(&self) -> Result<AppStatus, BrokerError> {
         #[cfg(unix)]
@@ -755,9 +770,14 @@ mod worker {
             signal: Option<i32>,
         },
     }
+    /// Launched jobs until their exit is audited. `Some(pid)` until the observer reaps the leader;
+    /// an unreaped leader keeps its PID, and so its process-group ID, from being reused.
+    type LiveJobs = Arc<Mutex<std::collections::HashMap<[u8; 16], Option<rustix::process::Pid>>>>;
+
     pub(super) struct Handle {
         state: Arc<Mutex<Shared>>,
         busy: Arc<AtomicBool>,
+        jobs: LiveJobs,
         sender: Option<Arc<SyncSender<Work>>>,
         thread: Option<std::thread::JoinHandle<()>>,
     }
@@ -779,9 +799,19 @@ mod worker {
             let sender = Arc::new(sender);
             let worker_sender = Arc::downgrade(&sender);
             let worker_state = Arc::clone(&state);
+            let jobs = LiveJobs::default();
+            let worker_jobs = Arc::clone(&jobs);
             let thread = std::thread::Builder::new()
                 .name("latch-vault".into())
-                .spawn(move || worker(directory, worker_state, receiver, worker_sender))
+                .spawn(move || {
+                    worker(
+                        directory,
+                        worker_state,
+                        receiver,
+                        worker_sender,
+                        worker_jobs,
+                    )
+                })
                 .ok();
             if thread.is_none() {
                 state.lock().unwrap_or_else(|e| e.into_inner()).failure =
@@ -790,9 +820,44 @@ mod worker {
             Self {
                 state,
                 busy,
+                jobs,
                 sender: Some(sender),
                 thread,
             }
+        }
+
+        /// SIGTERM every live job's process group, SIGKILL what remains after `grace`, then wait
+        /// (bounded) until the worker has audited every exit.
+        pub(super) fn stop_jobs(&self, grace: Duration) {
+            use rustix::process::{Signal, kill_process_group};
+            let signal = |signal: Signal| {
+                let live = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
+                for pid in live.values().flatten() {
+                    let _ = kill_process_group(*pid, signal);
+                }
+                live.values().any(Option::is_some)
+            };
+            let wait = |limit: Duration, done: &dyn Fn(&LiveJobs) -> bool| {
+                let deadline = std::time::Instant::now() + limit;
+                while !done(&self.jobs) && std::time::Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            };
+            let running = |jobs: &LiveJobs| {
+                jobs.lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .values()
+                    .any(Option::is_some)
+            };
+            if signal(Signal::TERM) {
+                wait(grace, &|jobs| !running(jobs));
+                if running(&self.jobs) {
+                    signal(Signal::KILL);
+                }
+            }
+            wait(Duration::from_secs(2), &|jobs| {
+                jobs.lock().unwrap_or_else(|e| e.into_inner()).is_empty()
+            });
         }
 
         pub(super) fn status(&self) -> Result<AppStatus, BrokerError> {
@@ -1195,6 +1260,7 @@ mod worker {
         state: Arc<Mutex<Shared>>,
         receiver: Receiver<Work>,
         sender: std::sync::Weak<SyncSender<Work>>,
+        jobs: LiveJobs,
     ) {
         let initialized = (|| {
             let db = Database::open(&directory)?;
@@ -1345,7 +1411,8 @@ mod worker {
                     epoch,
                     reply,
                 } => {
-                    let mut result = launch_run(&mut db, &state, &sender, &mut run, missing, epoch);
+                    let mut result =
+                        launch_run(&mut db, &state, &sender, &jobs, &mut run, missing, epoch);
                     if let Err(error) = &result
                         && !matches!(
                             error,
@@ -1379,7 +1446,11 @@ mod worker {
                     exit_code,
                     signal,
                 } => {
-                    if db.process_exit(&job_id, exit_code, signal).is_err() {
+                    let recorded = db.process_exit(&job_id, exit_code, signal);
+                    jobs.lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .remove(&job_id);
+                    if recorded.is_err() {
                         let mut shared = state.lock().unwrap_or_else(|e| e.into_inner());
                         shared.failure = Some(BrokerError::AuditUnavailable);
                         shared.session.lock();
@@ -1871,6 +1942,7 @@ mod worker {
         db: &mut Database,
         state: &Mutex<Shared>,
         sender: &std::sync::Weak<SyncSender<Work>>,
+        jobs: &LiveJobs,
         run: &mut PreparedRun,
         missing: Vec<MissingSecretInput>,
         epoch: u64,
@@ -1977,6 +2049,7 @@ mod worker {
         let mut command = Command::new(&run.plan.program().target);
         command
             .arg0(&run.requested)
+            .process_group(0)
             .args(&run.args)
             .current_dir(&run.directory)
             .env_clear()
@@ -1998,8 +2071,25 @@ mod worker {
         };
         let _ = db.launch_result(&job_id, true);
         let observer = sender.upgrade().ok_or(BrokerError::StorageUnavailable)?;
+        let pid = rustix::process::Pid::from_child(&child);
+        jobs.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(job_id, Some(pid));
+        let observer_jobs = Arc::clone(jobs);
         std::thread::spawn(move || {
-            let status = child.wait().ok();
+            use rustix::process::{WaitId, WaitIdOptions, waitid};
+            while let Err(rustix::io::Errno::INTR) = waitid(
+                WaitId::Pid(pid),
+                WaitIdOptions::EXITED | WaitIdOptions::NOWAIT,
+            ) {}
+            // Mark reaped under the registry lock so `stop_jobs` never signals a reused group ID.
+            let status = {
+                let mut live = observer_jobs.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(entry) = live.get_mut(&job_id) {
+                    *entry = None;
+                }
+                child.wait().ok()
+            };
             let _ = observer.send(Work::JobExit {
                 job_id,
                 exit_code: status.as_ref().and_then(std::process::ExitStatus::code),
@@ -2935,6 +3025,67 @@ mod tests {
                 new_value.as_str()
             )
         );
+        let launch_job = |script: &str| {
+            let run = broker
+                .prepare_run(
+                    protocol::RunRequest {
+                        protocol_version: protocol::VERSION,
+                        agent: protocol::AgentKind::Other,
+                        project: project_id.clone(),
+                        environment: protocol::Environment::Development,
+                        names: vec!["SERVICE_TOKEN".into()],
+                        executable: "sh".into(),
+                        args: vec!["-c".into(), script.into()],
+                        shell: true,
+                        path: "/usr/bin:/bin".into(),
+                    },
+                    crate::project::random_id().unwrap(),
+                    crate::process::PeerIdentity {
+                        uid: rustix::process::geteuid().as_raw(),
+                        pid: std::process::id(),
+                    },
+                    epoch.clone(),
+                )
+                .unwrap();
+            broker
+                .launch_run(run, vec![], epoch.clone())
+                .unwrap()
+                .job_id
+        };
+        let finished_job = launch_job("exit 0");
+        let finished_by = Instant::now() + Duration::from_secs(2);
+        while !broker
+            .audit_events(None, epoch.clone())
+            .unwrap()
+            .events
+            .iter()
+            .any(|event| event.operation == 19 && event.job_id.as_ref() == Some(&finished_job))
+        {
+            assert!(
+                Instant::now() < finished_by,
+                "short job exit was not audited"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let terminated_job = launch_job("exec sleep 30");
+        let stubborn_job = launch_job("trap '' TERM; while :; do sleep 1; done");
+        std::thread::sleep(Duration::from_millis(200));
+        let stopping = Instant::now();
+        broker.stop_jobs_after(Duration::from_millis(300));
+        assert!(
+            stopping.elapsed() < Duration::from_secs(3),
+            "stopping jobs did not finish promptly"
+        );
+        let history = broker.audit_events(None, epoch.clone()).unwrap();
+        for job in [&terminated_job, &stubborn_job] {
+            assert!(
+                history
+                    .events
+                    .iter()
+                    .any(|event| event.operation == 19 && event.job_id.as_ref() == Some(job)),
+                "stopped job exit was not audited"
+            );
+        }
         let listed = broker
             .secrets(
                 SecretCommand::List {
@@ -3303,6 +3454,22 @@ mod tests {
         broker.lock().expect("lock failed");
         drop(broker);
         let db = Database::open(dir.path()).expect("database reopen failed");
+        let job_signal = |job: &str| -> Option<i64> {
+            db.connection
+                .query_row(
+                    "SELECT signal FROM jobs WHERE id=?1 AND state=4",
+                    [crate::project::parse_id(job).unwrap()],
+                    |row| row.get(0),
+                )
+                .expect("job read failed")
+        };
+        assert_eq!(
+            job_signal(&finished_job),
+            None,
+            "an exited job was signaled"
+        );
+        assert_eq!(job_signal(&terminated_job), Some(15));
+        assert_eq!(job_signal(&stubborn_job), Some(9));
         let wrapped = db
             .wrapped()
             .expect("wrapped key read failed")
