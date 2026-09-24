@@ -182,7 +182,8 @@ impl RunRequest {
             || self.args.len() > 256
             || self.args.iter().any(|arg| !bounded_text(arg))
             || self.names.len() > 64
-            || !valid_search_path(&self.path)
+            // PATH is only resolved by a Unix broker; other targets never send a request.
+            || (cfg!(unix) && !valid_search_path(&self.path))
         {
             return Err(InvalidRequest);
         }
@@ -219,6 +220,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn rejects_relative_empty_and_unbounded_search_paths() {
         for path in [

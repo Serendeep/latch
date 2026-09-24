@@ -102,21 +102,16 @@ fn main() -> ExitCode {
         }
         _ => return invalid(json),
     };
-    // Only Unix has a broker transport; the request's PATH rules are Unix-specific too.
-    #[cfg(unix)]
-    let response = if request.validate().is_err() {
+    if request.validate().is_err() {
         return invalid(json);
-    } else {
-        latch_core::transport::exchange(&request).unwrap_or(RunResponse::Error {
-            code: RunErrorCode::BrokerUnavailable,
-        })
-    };
+    }
+    #[cfg(unix)]
+    let response = latch_core::transport::exchange(&request).unwrap_or(RunResponse::Error {
+        code: RunErrorCode::BrokerUnavailable,
+    });
     #[cfg(not(unix))]
-    let response = {
-        let _ = request;
-        RunResponse::Error {
-            code: RunErrorCode::BrokerUnavailable,
-        }
+    let response = RunResponse::Error {
+        code: RunErrorCode::BrokerUnavailable,
     };
     respond(response, json)
 }
