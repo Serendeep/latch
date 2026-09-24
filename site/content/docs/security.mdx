@@ -34,7 +34,7 @@ Approval is consumed before the operating system spawn call so a failed or ambig
 
 Dependencies and toolchains are pinned in manifests and lockfiles. CI includes dependency audits and secret scanning with full value redaction. Tauri's Linux dependency graph currently includes unmaintained GTK3 bindings and a [GLib soundness advisory](https://rustsec.org/advisories/RUSTSEC-2024-0429). These findings remain visible and require review before release.
 
-No signed release or updater exists. Public release requires qualified platform key-store behavior, native IPC testing, recovery testing, signing and artifact verification, and external review of the cryptographic and approval design. Automated checks alone do not establish those properties.
+No signed release or updater exists. Releases ship only on platforms whose key-store and launch behavior were exercised. Latch has not had an external security review, and no release claims that its cryptography, IPC, approval handling, recovery, or launch behavior has been independently verified. Automated checks alone do not establish those properties.
 
 ## Configuration import
 
