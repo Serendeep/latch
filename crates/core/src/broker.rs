@@ -245,7 +245,7 @@ impl From<std::io::Error> for BrokerError {
         Self::StorageUnavailable
     }
 }
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 impl From<rusqlite::Error> for BrokerError {
     fn from(_: rusqlite::Error) -> Self {
         Self::StorageUnavailable
@@ -254,38 +254,48 @@ impl From<rusqlite::Error> for BrokerError {
 
 /// Handle shared with narrow desktop commands. It never serializes key material.
 pub struct Broker {
-    #[cfg(target_os = "linux")]
-    inner: linux::Handle,
+    #[cfg(unix)]
+    inner: Option<worker::Handle>,
+}
+
+fn unavailable() -> AppStatus {
+    AppStatus {
+        protocol_version: protocol::VERSION,
+        vault: VaultAvailability::Unavailable,
+        lock_epoch: "0".into(),
+    }
 }
 
 impl Broker {
     /// Start one worker using a directory resolved by Rust, never supplied by IPC.
     pub fn start(directory: PathBuf) -> Self {
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         {
             Self {
-                inner: linux::Handle::start(directory),
+                inner: crate::platform::QUALIFIED.then(|| worker::Handle::start(directory)),
             }
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(unix))]
         {
             let _ = directory;
             Self {}
         }
     }
+    #[cfg(unix)]
+    fn worker(&self) -> Result<&worker::Handle, BrokerError> {
+        self.inner.as_ref().ok_or(BrokerError::Unsupported)
+    }
     /// Read public state without reading the OS store or blocking on KDF work.
     pub fn status(&self) -> Result<AppStatus, BrokerError> {
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         {
-            self.inner.status()
+            self.inner
+                .as_ref()
+                .map_or_else(|| Ok(unavailable()), worker::Handle::status)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(unix))]
         {
-            Ok(AppStatus {
-                protocol_version: protocol::VERSION,
-                vault: VaultAvailability::Unavailable,
-                lock_epoch: "0".into(),
-            })
+            Ok(unavailable())
         }
     }
     /// Create one vault and return locked. Call from a blocking task, not the UI.
@@ -307,11 +317,11 @@ impl Broker {
             return Err(BrokerError::InvalidState);
         }
         let epoch: u64 = epoch.parse().map_err(|_| BrokerError::InvalidState)?;
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         {
-            self.inner.perform(create, password, epoch)
+            self.worker()?.perform(create, password, epoch)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(unix))]
         {
             let _ = (create, password, epoch);
             Err(BrokerError::Unsupported)
@@ -323,11 +333,11 @@ impl Broker {
         path: PathBuf,
         epoch: String,
     ) -> Result<crate::project::DirectorySelection, BrokerError> {
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         {
-            self.inner.select_directory(path, epoch)
+            self.worker()?.select_directory(path, epoch)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(unix))]
         {
             let _ = (path, epoch);
             Err(BrokerError::Unsupported)
@@ -366,11 +376,11 @@ impl Broker {
                 }
             }
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         {
-            self.inner.projects(command, epoch)
+            self.worker()?.projects(command, epoch)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(unix))]
         {
             let _ = (command, epoch);
             Err(BrokerError::Unsupported)
@@ -391,11 +401,11 @@ impl Broker {
         }) {
             return Err(BrokerError::InvalidState);
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         {
-            self.inner.audit_events(cursor, epoch)
+            self.worker()?.audit_events(cursor, epoch)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(unix))]
         {
             let _ = (cursor, epoch);
             Err(BrokerError::Unsupported)
@@ -478,11 +488,11 @@ impl Broker {
             }
             _ => {}
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         {
-            self.inner.secrets(command, epoch)
+            self.worker()?.secrets(command, epoch)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(unix))]
         {
             let _ = (command, epoch);
             Err(BrokerError::Unsupported)
@@ -501,11 +511,11 @@ impl Broker {
         if request.names.is_empty() {
             return Err(BrokerError::InvalidRun);
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         {
-            self.inner.prepare_run(request, request_id, peer, epoch)
+            self.worker()?.prepare_run(request, request_id, peer, epoch)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(unix))]
         {
             let _ = (request, request_id, peer, epoch);
             Err(BrokerError::Unsupported)
@@ -518,11 +528,11 @@ impl Broker {
         run: crate::process::PreparedRun,
         epoch: String,
     ) -> Result<(), BrokerError> {
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         {
-            self.inner.close_run(run, epoch, 4)
+            self.worker()?.close_run(run, epoch, 4)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(unix))]
         {
             let _ = (run, epoch);
             Err(BrokerError::Unsupported)
@@ -535,11 +545,11 @@ impl Broker {
         run: crate::process::PreparedRun,
         epoch: String,
     ) -> Result<(), BrokerError> {
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         {
-            self.inner.close_run(run, epoch, 6)
+            self.worker()?.close_run(run, epoch, 6)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(unix))]
         {
             let _ = (run, epoch);
             Err(BrokerError::Unsupported)
@@ -552,11 +562,11 @@ impl Broker {
         run: crate::process::PreparedRun,
         epoch: String,
     ) -> Result<(), BrokerError> {
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         {
-            self.inner.close_run(run, epoch, 5)
+            self.worker()?.close_run(run, epoch, 5)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(unix))]
         {
             let _ = (run, epoch);
             Err(BrokerError::Unsupported)
@@ -570,11 +580,11 @@ impl Broker {
         missing: Vec<crate::process::MissingSecretInput>,
         epoch: String,
     ) -> Result<crate::process::LaunchReceipt, BrokerError> {
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         {
-            self.inner.launch_run(run, missing, epoch)
+            self.worker()?.launch_run(run, missing, epoch)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(unix))]
         {
             let _ = (run, missing, epoch);
             Err(BrokerError::Unsupported)
@@ -583,22 +593,25 @@ impl Broker {
 
     /// Drop the live key and invalidate pending work immediately, even on disk failure.
     pub fn lock(&self) -> Result<AppStatus, BrokerError> {
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         {
-            self.inner.lock()
+            match &self.inner {
+                Some(worker) => worker.lock(),
+                None => self.status(),
+            }
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(unix))]
         {
             self.status()
         }
     }
 }
 
-#[cfg(target_os = "linux")]
-mod linux {
+#[cfg(unix)]
+mod worker {
     use super::*;
     use crate::{
-        keystore::KeyStore,
+        platform::KeyStore,
         process::{
             ExecutableIdentity, LaunchReceipt, MissingSecretInput, PeerIdentity, PreparedRun,
             ReviewedSecret, RunReview, into_parts,
@@ -2426,7 +2439,7 @@ mod linux {
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
-    use crate::{keystore::KeyStore, storage::Database};
+    use crate::{platform::KeyStore, storage::Database};
     use std::{
         sync::Arc,
         time::{Duration, Instant},

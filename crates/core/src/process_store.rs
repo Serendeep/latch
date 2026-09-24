@@ -171,7 +171,7 @@ impl Database {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;

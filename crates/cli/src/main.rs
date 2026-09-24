@@ -101,11 +101,11 @@ fn main() -> ExitCode {
     if request.validate().is_err() {
         return invalid(json);
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     let response = latch_core::transport::exchange(&request).unwrap_or(RunResponse::Error {
         code: RunErrorCode::BrokerUnavailable,
     });
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(unix))]
     let response = RunResponse::Error {
         code: RunErrorCode::BrokerUnavailable,
     };

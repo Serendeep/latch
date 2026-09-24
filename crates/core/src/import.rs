@@ -1,7 +1,7 @@
 //! Bounded literal dotenv parsing. Never evaluates input or includes it in errors.
 use crate::{broker::BrokerError, protocol::valid_variable_name, secret::SecretValue};
 use serde::Serialize;
-#[cfg(any(test, target_os = "linux"))]
+#[cfg(any(test, unix))]
 use zeroize::Zeroizing;
 
 /// Maximum selected file size in bytes.
@@ -93,7 +93,7 @@ pub fn parse(bytes: &[u8], example: bool) -> Result<Vec<Entry>, BrokerError> {
 }
 
 /// Read once from a native-selected regular file, without following a final symlink.
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 pub(crate) fn read(path: &std::path::Path) -> Result<Zeroizing<Vec<u8>>, BrokerError> {
     use std::{io::Read, os::unix::fs::OpenOptionsExt, path::Component};
     if !path.is_absolute() || path.components().any(|c| matches!(c, Component::ParentDir)) {

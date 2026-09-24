@@ -299,7 +299,7 @@ fn schema(connection: &Connection) -> Result<Vec<(String, String, String)>, Brok
         .collect::<Result<Vec<_>, _>>()?)
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
     use crate::vault::{Passphrase, PreparedVault};

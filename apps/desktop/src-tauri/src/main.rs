@@ -31,15 +31,15 @@ struct PendingRequest {
 
 struct RequestState {
     generation: std::sync::atomic::AtomicU64,
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     intake: Mutex<()>,
     pending: Mutex<Option<PendingRequest>>,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 struct SocketGuard(std::path::PathBuf);
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 impl Drop for SocketGuard {
     fn drop(&mut self) {
         let Ok(metadata) = self.0.symlink_metadata() else {
@@ -67,7 +67,7 @@ fn run_error(error: BrokerError) -> RunErrorCode {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn start_agent_listener(
     window: tauri::WebviewWindow,
     broker: Arc<Broker>,
@@ -105,7 +105,7 @@ fn start_agent_listener(
     Ok(SocketGuard(path))
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn handle_agent(
     mut stream: std::os::unix::net::UnixStream,
     window: tauri::WebviewWindow,
@@ -114,11 +114,8 @@ fn handle_agent(
 ) {
     use std::time::Duration;
     let response = (|| {
-        let credentials = rustix::net::sockopt::socket_peercred(&stream)
-            .map_err(|_| RunErrorCode::BrokerUnavailable)?;
-        if credentials.uid != rustix::process::geteuid() {
-            return Err(RunErrorCode::BrokerUnavailable);
-        }
+        let peer =
+            latch_core::platform::same_user_peer(&stream).ok_or(RunErrorCode::BrokerUnavailable)?;
         stream
             .set_read_timeout(Some(Duration::from_secs(5)))
             .map_err(|_| RunErrorCode::BrokerUnavailable)?;
@@ -163,17 +160,8 @@ fn handle_agent(
         };
         let mut request_id = [0; 16];
         getrandom::fill(&mut request_id).map_err(|_| RunErrorCode::InternalFailure)?;
-        let pid = credentials.pid.as_raw_nonzero().get() as u32;
         let run = broker
-            .prepare_run(
-                request,
-                request_id,
-                latch_core::process::PeerIdentity {
-                    uid: credentials.uid.as_raw(),
-                    pid,
-                },
-                status.lock_epoch.clone(),
-            )
+            .prepare_run(request, request_id, peer, status.lock_epoch.clone())
             .map_err(|error| {
                 let _ = window.hide();
                 run_error(error)
@@ -1114,14 +1102,14 @@ fn main() {
             let broker = Arc::new(Broker::start(directory.join("vault")));
             let requests = Arc::new(RequestState {
                 generation: std::sync::atomic::AtomicU64::new(0),
-                #[cfg(target_os = "linux")]
+                #[cfg(unix)]
                 intake: Mutex::new(()),
                 pending: Mutex::new(None),
             });
             app.manage(Arc::clone(&broker));
             app.manage(Arc::clone(&requests));
-            #[cfg(target_os = "linux")]
-            {
+            #[cfg(unix)]
+            if latch_core::platform::QUALIFIED {
                 let window = app
                     .get_webview_window("request")
                     .ok_or_else(|| std::io::Error::other("Main window is unavailable."))?;

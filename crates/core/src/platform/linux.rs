@@ -1,15 +1,45 @@
-//! Explicit GNOME login collection adapter. Never creates or unlocks collections.
-use crate::{broker::BrokerError, vault::DeviceKey};
+//! Linux: GNOME login collection, `XDG_RUNTIME_DIR` endpoint, and `SO_PEERCRED` callers.
+use crate::{broker::BrokerError, process::PeerIdentity, vault::DeviceKey};
 use secret_service::{EncryptionType, blocking::SecretService};
 use std::{
     collections::HashMap,
     fs::{self, OpenOptions},
     io::Read,
-    os::unix::fs::{MetadataExt, OpenOptionsExt},
+    os::unix::{
+        fs::{MetadataExt, OpenOptionsExt},
+        net::UnixStream,
+    },
     path::PathBuf,
     time::Duration,
 };
 use zeroize::Zeroizing;
+
+/// Owner-only runtime directory for the local agent endpoint.
+pub fn runtime_dir() -> Option<PathBuf> {
+    let directory = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from)?;
+    let metadata = directory.symlink_metadata().ok()?;
+    if !directory.is_absolute()
+        || metadata.file_type().is_symlink()
+        || !metadata.is_dir()
+        || metadata.uid() != rustix::process::geteuid().as_raw()
+        || metadata.mode() & 0o077 != 0
+    {
+        return None;
+    }
+    Some(directory)
+}
+
+/// Kernel-observed caller, only when it runs as this process's effective user.
+pub fn same_user_peer(stream: &UnixStream) -> Option<PeerIdentity> {
+    let credentials = rustix::net::sockopt::socket_peercred(stream).ok()?;
+    if credentials.uid != rustix::process::geteuid() {
+        return None;
+    }
+    Some(PeerIdentity {
+        uid: credentials.uid.as_raw(),
+        pid: credentials.pid.as_raw_nonzero().get() as u32,
+    })
+}
 
 pub(crate) struct KeyStore {
     service: SecretService<'static>,
