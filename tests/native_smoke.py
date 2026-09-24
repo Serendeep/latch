@@ -108,7 +108,7 @@ def main():
             request("POST", prefix + "/window", {"handle": main_handle})
             result = request("POST", prefix + "/execute/async", {"script": "const done = arguments[arguments.length - 1]; window.__TAURI_INTERNALS__.invoke('app_status').then(done, e => done({error: ['storage_unavailable','already_running','recovery_required'].includes(e) ? e : 'unexpected'}));", "args": []})
             for _ in range(50):
-                if result["value"] == {"protocol_version": 1, "lock_epoch": "0", "vault": "absent"}:
+                if result["value"] == {"protocol_version": 2, "lock_epoch": "0", "vault": "absent"}:
                     break
                 time.sleep(0.1)
                 result = request("POST", prefix + "/execute/async", {"script": "const done = arguments[arguments.length - 1]; window.__TAURI_INTERNALS__.invoke('app_status').then(done, e => done({error: ['storage_unavailable','already_running','recovery_required'].includes(e) ? e : 'unexpected'}));", "args": []})

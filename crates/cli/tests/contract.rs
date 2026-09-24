@@ -98,6 +98,7 @@ fn sends_bare_names_with_the_callers_path_and_reports_not_found() {
     assert!(String::from_utf8_lossy(&output.stdout).contains("command_not_found"));
 }
 
+#[cfg(unix)]
 #[test]
 fn relative_path_entries_are_refused_before_sending() {
     let runtime = tempfile::tempdir().unwrap();

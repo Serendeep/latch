@@ -9,7 +9,7 @@ test("unlocking the popup never approves a request or lists vault records", asyn
   vi.mocked(invoke).mockImplementation((command) =>
     Promise.resolve(
       command === "app_status" || command === "vault_unlock"
-        ? { protocol_version: 1, lock_epoch: "7", vault: "locked" }
+        ? { protocol_version: 2, lock_epoch: "7", vault: "locked" }
         : null,
     ),
   );

@@ -2977,7 +2977,7 @@ mod tests {
             executable: "sh".into(),
             args: vec![
                 "-c".into(),
-                "printf '%s|%s|%s' \"$SERVICE_TOKEN\" \"$NEW_AGENT_TOKEN\" \"$PATH\" > \"$1\""
+                "printf '%s|%s|%s' \"$SERVICE_TOKEN\" \"$NEW_AGENT_TOKEN\" \"$PATH\" > \"$1.tmp\" && mv \"$1.tmp\" \"$1\""
                     .into(),
                 "latch-test".into(),
                 marker.to_string_lossy().into_owned(),

@@ -11,7 +11,7 @@ beforeEach(() => {
 
 test("shows truthful availability and permits theme selection without secret inputs", async () => {
   vi.mocked(invoke).mockResolvedValue({
-    protocol_version: 1,
+    protocol_version: 2,
     lock_epoch: "0",
     vault: "unavailable",
   });
@@ -37,7 +37,7 @@ test("does not display backend error details and allows an explicit retry", asyn
   ).toBeVisible();
   expect(document.body.textContent?.includes(privateDetail)).toBe(false);
   vi.mocked(invoke).mockResolvedValue({
-    protocol_version: 1,
+    protocol_version: 2,
     lock_epoch: "0",
     vault: "unavailable",
   });
@@ -54,7 +54,7 @@ test("creates a vault with concealed input and clears the form during IPC", asyn
   vi.mocked(invoke).mockImplementation((command) => {
     if (command === "app_status")
       return Promise.resolve({
-        protocol_version: 1,
+        protocol_version: 2,
         lock_epoch: "0",
         vault: state,
       });
@@ -79,7 +79,7 @@ test("creates a vault with concealed input and clears the form during IPC", asyn
     ),
   ).toBe(true);
   state = "locked";
-  finish?.({ protocol_version: 1, lock_epoch: "0", vault: "locked" });
+  finish?.({ protocol_version: 2, lock_epoch: "0", vault: "locked" });
   expect(await screen.findByText("Your vault is locked.")).toBeVisible();
   expect(
     (screen.getByLabelText("Latch passphrase") as HTMLInputElement).value ===
@@ -92,7 +92,7 @@ test("rejects mismatched confirmation locally and displays fixed unlock errors",
   const privateDetail = `test-${crypto.randomUUID()}`;
   vi.mocked(invoke).mockImplementation((command) =>
     command === "app_status"
-      ? Promise.resolve({ protocol_version: 1, lock_epoch: "0", vault: state })
+      ? Promise.resolve({ protocol_version: 2, lock_epoch: "0", vault: state })
       : Promise.reject(privateDetail),
   );
   const { unmount } = render(<App />);

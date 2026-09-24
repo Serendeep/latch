@@ -54,7 +54,7 @@ test("project creation, explicit scope deletion, accessible confirmation, and lo
       value: {
         invoke: async (command: string, args: Record<string, unknown> = {}) => {
           if (command === "app_status")
-            return { protocol_version: 1, lock_epoch: "1", vault };
+            return { protocol_version: 2, lock_epoch: "1", vault };
           if (command === "agent_request_view") return agentRequest;
           if (command === "agent_request_decide") {
             agentRequest = null;
@@ -62,7 +62,7 @@ test("project creation, explicit scope deletion, accessible confirmation, and lo
           }
           if (command === "vault_lock") {
             vault = "locked";
-            return { protocol_version: 1, lock_epoch: "2", vault };
+            return { protocol_version: 2, lock_epoch: "2", vault };
           }
           if (command === "project_choose_directory")
             return {

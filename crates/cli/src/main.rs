@@ -102,16 +102,21 @@ fn main() -> ExitCode {
         }
         _ => return invalid(json),
     };
-    if request.validate().is_err() {
-        return invalid(json);
-    }
+    // Only Unix has a broker transport; the request's PATH rules are Unix-specific too.
     #[cfg(unix)]
-    let response = latch_core::transport::exchange(&request).unwrap_or(RunResponse::Error {
-        code: RunErrorCode::BrokerUnavailable,
-    });
+    let response = if request.validate().is_err() {
+        return invalid(json);
+    } else {
+        latch_core::transport::exchange(&request).unwrap_or(RunResponse::Error {
+            code: RunErrorCode::BrokerUnavailable,
+        })
+    };
     #[cfg(not(unix))]
-    let response = RunResponse::Error {
-        code: RunErrorCode::BrokerUnavailable,
+    let response = {
+        let _ = request;
+        RunResponse::Error {
+            code: RunErrorCode::BrokerUnavailable,
+        }
     };
     respond(response, json)
 }
@@ -185,7 +190,7 @@ fn respond(response: RunResponse, json: bool) -> ExitCode {
 
 fn invalid(json: bool) -> ExitCode {
     if json {
-        println!(r#"{{"protocol_version":1,"status":"rejected","code":"invalid_input"}}"#);
+        println!(r#"{{"protocol_version":{VERSION},"status":"rejected","code":"invalid_input"}}"#);
     } else {
         eprintln!("Invalid request. Check the command, scope, names, and size limits.");
     }
