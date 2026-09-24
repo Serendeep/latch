@@ -150,6 +150,25 @@ present: Array<string>,
  * Empty import values omitted from the candidate batch.
  */
 empty: Array<string>, };
+export type LaunchRole = "program" | "interpreter" | "interpreter_command";
+export type LaunchStep = {
+/**
+ * Position in the chain.
+ */
+role: LaunchRole,
+/**
+ * Absolute path as found on PATH or as given.
+ */
+found: string,
+/**
+ * Canonical file that is checked and run; equal to `found` when no link is involved.
+ */
+target: string,
+/**
+ * The target's file name differs from the found name, so a launcher such as a
+ * version-manager shim may choose the actual runtime when it starts.
+ */
+may_select_runtime: boolean, };
 export type RunReview = {
 /**
  * Opaque request identity.
@@ -176,9 +195,13 @@ directory: string,
  */
 environment: Environment,
 /**
- * Canonical executable path.
+ * Command as requested: a bare name or an absolute path. Also the child's `argv[0]`.
  */
 executable: string,
+/**
+ * Files the command resolves to, in order: program, `#!` interpreter, `env` target.
+ */
+launch: Array<LaunchStep>,
 /**
  * Literal ordered arguments.
  */

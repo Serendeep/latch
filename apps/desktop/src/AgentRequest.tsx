@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { decideAgentRequest, getAgentRequest } from "./api";
-import type { RunReview } from "./generated/core";
+import type { LaunchRole, RunReview } from "./generated/core";
 
 export default function AgentRequest({ epoch }: { epoch: string }) {
   const [request, setRequest] = useState<RunReview | null>(null);
@@ -108,6 +108,34 @@ export default function AgentRequest({ epoch }: { epoch: string }) {
                 .join(" ")}
             </code>
           </div>
+          <div className="request-launch">
+            <span>Runs, found on the agent's PATH</span>
+            <ol>
+              {request.launch.map((step) => (
+                <li key={`${step.role}:${step.found}`}>
+                  <span className="launch-role">{launchRole(step.role)}</span>{" "}
+                  <code>{step.found}</code>
+                  {step.target !== step.found ? (
+                    <>
+                      {" "}
+                      <span className="launch-link">links to</span>{" "}
+                      <code>{step.target}</code>
+                    </>
+                  ) : null}
+                  {step.may_select_runtime ? (
+                    <span className="launch-note">
+                      {" "}
+                      This launcher may choose which runtime to start when it
+                      runs.
+                    </span>
+                  ) : null}
+                </li>
+              ))}
+            </ol>
+            <span className="launch-note">
+              Commands that this program starts later are not checked.
+            </span>
+          </div>
           {request.shell ? (
             <p className="risk-note">
               The caller marked this as an interpreter or shell command. The
@@ -167,6 +195,13 @@ export default function AgentRequest({ epoch }: { epoch: string }) {
           One launch only. The process can read and leak the secrets it
           receives.
         </p>
+        {request?.missing.length ? (
+          <p className="dialog-note">
+            Enter {request.missing.length} missing{" "}
+            {request.missing.length === 1 ? "value" : "values"} in the form
+            before approving.
+          </p>
+        ) : null}
         <div className="dialog-actions">
           <button
             ref={deny}
@@ -200,6 +235,12 @@ function agentName(agent: RunReview["agent"]): string {
   return "Other agent, self-reported";
 }
 
+function launchRole(role: LaunchRole): string {
+  if (role === "program") return "Program";
+  if (role === "interpreter") return "Interpreter";
+  return "Interpreter runs";
+}
+
 function quoteArgument(value: string): string {
   return JSON.stringify(value);
 }
@@ -219,6 +260,7 @@ function isRunReview(value: RunReview | null): value is RunReview {
     value &&
     typeof value.id === "string" &&
     typeof value.executable === "string" &&
+    Array.isArray(value.launch) &&
     Array.isArray(value.args) &&
     Array.isArray(value.secrets) &&
     Array.isArray(value.missing),

@@ -2,7 +2,7 @@
 
 use crate::{
     broker::BrokerError,
-    process::PreparedRun,
+    process::{PeerIdentity, PreparedRun},
     protocol::AgentKind,
     secret_store::{SecretRow, write_secret},
     storage::{Database, now_ms},
@@ -23,6 +23,21 @@ impl Database {
         self.connection.execute(
             "INSERT INTO audit_events(occurred_at_ms,operation,result,request_id,project_id,environment_id,agent_kind,peer_uid,peer_pid) VALUES (?1,16,1,?2,?3,?4,?5,?6,?7)",
             params![now_ms(), run.request_id, run.project_id, run.environment_id, agent_code(run.agent), run.peer.uid, run.peer.pid],
+        ).map_err(|_| BrokerError::AuditUnavailable)?;
+        Ok(())
+    }
+
+    /// Operation 16 with result 12: the command did not resolve, so no review was shown.
+    pub(crate) fn record_rejected_request(
+        &self,
+        request_id: &[u8; 16],
+        agent: AgentKind,
+        peer: PeerIdentity,
+    ) -> Result<(), BrokerError> {
+        self.audit_capacity()?;
+        self.connection.execute(
+            "INSERT INTO audit_events(occurred_at_ms,operation,result,request_id,agent_kind,peer_uid,peer_pid) VALUES (?1,16,12,?2,?3,?4,?5)",
+            params![now_ms(), request_id, agent_code(agent), peer.uid, peer.pid],
         ).map_err(|_| BrokerError::AuditUnavailable)?;
         Ok(())
     }
@@ -217,5 +232,27 @@ mod tests {
             )
             .unwrap();
         assert!(state == 6 && events == 1 && requests == 1);
+    }
+
+    #[test]
+    fn records_a_not_found_rejection_without_project_scope() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let db = Database::open(directory.path()).unwrap();
+        db.record_rejected_request(
+            &[7u8; 16],
+            AgentKind::Codex,
+            PeerIdentity { uid: 1000, pid: 42 },
+        )
+        .unwrap();
+        let rows: i64 = db
+            .connection
+            .query_row(
+                "SELECT count(*) FROM audit_events WHERE operation=16 AND result=12 AND request_id=?1 AND project_id IS NULL AND agent_kind=1 AND peer_uid=1000 AND peer_pid=42",
+                [[7u8; 16]],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(rows, 1);
     }
 }

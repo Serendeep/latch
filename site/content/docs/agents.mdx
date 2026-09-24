@@ -32,12 +32,12 @@ latch run --project /path/to/project --env development \
 
 ## Approval scope
 
-Repeat `--secret` for each required name. Never pass values as arguments. The popup shows the project, environment, exact executable and arguments, requested names, and caller label. Add missing values there, then approve one launch or deny the request.
+Repeat `--secret` for each required name. Never pass values as arguments. The popup shows the project, environment, exact command and arguments, the files the command resolves to, requested names, and caller label. Add missing values there, then approve one launch or deny the request.
 
-Latch launches the executable directly with a small baseline environment and only the requested secrets. It does not capture the child's input or output. Use `--shell` when intentionally requesting a shell or interpreter; arguments are still passed directly.
+Latch finds a bare command name such as `npm` using the requesting shell's `PATH`, and follows one `#!` interpreter hop, including the program an `env` line starts. The popup lists each file found and, when it is a link such as a version-manager shim, the file it links to. At launch Latch checks that none of those files changed, then runs the command with that same `PATH`, a small baseline environment, and only the requested secrets. It does not capture the child's input or output. Use `--shell` when intentionally requesting a shell or interpreter; arguments are still passed directly.
 
 The agent label is self-reported audit context, not proof of identity. Requests expire after five minutes. The CLI returns after launch; waiting for completion and cancelling a running job are not implemented.
 
 ## When a request fails
 
-If Latch is unavailable, start the desktop application. If the project is unknown, register its directory in the manager. Unlock the vault in the popup when prompted. A denied or expired request needs a new user decision; agents must not retry it automatically.
+If Latch is unavailable, start the desktop application. If the project is unknown, register its directory in the manager. Unlock the vault in the popup when prompted. A denied or expired request needs a new user decision; agents must not retry it automatically. Exit code 12 (`command_not_found`) means the command, its interpreter, or the program `env` starts is not on the requesting `PATH`. No popup is shown and the rejection is recorded in the audit history.

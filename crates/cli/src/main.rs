@@ -89,11 +89,15 @@ fn main() -> ExitCode {
                 environment: env,
                 names,
                 executable: match resolve_executable(&command.remove(0)) {
-                    Some(path) => path,
+                    Some(executable) => executable,
                     None => return invalid(json),
                 },
                 args: command,
                 shell,
+                path: match std::env::var("PATH") {
+                    Ok(path) => path,
+                    Err(_) => return invalid(json),
+                },
             }
         }
         _ => return invalid(json),
@@ -127,18 +131,13 @@ fn resolve_project(project: String) -> Option<String> {
         .ok()
 }
 
+/// Paths are made absolute against this shell's directory; bare names go to the broker, which
+/// resolves them on the `PATH` sent with the request.
 fn resolve_executable(executable: &str) -> Option<String> {
-    let path = Path::new(executable);
-    let resolved = if path.components().count() > 1 || path.is_absolute() {
-        std::fs::canonicalize(path).ok()?
-    } else {
-        std::env::split_paths(&std::env::var_os("PATH")?)
-            .filter(|directory| directory.is_absolute())
-            .map(|directory| directory.join(path))
-            .find(|candidate| executable_file(candidate.as_path()))?
-            .canonicalize()
-            .ok()?
-    };
+    if !executable.contains('/') {
+        return (!executable.is_empty()).then(|| executable.to_owned());
+    }
+    let resolved = std::fs::canonicalize(executable).ok()?;
     executable_file(&resolved).then(|| resolved.into_os_string().into_string().ok())?
 }
 
@@ -163,6 +162,7 @@ fn respond(response: RunResponse, json: bool) -> ExitCode {
             RunErrorCode::VaultLocked => 8,
             RunErrorCode::QueueFull => 11,
             RunErrorCode::StaleReview => 9,
+            RunErrorCode::CommandNotFound => 12,
             RunErrorCode::LaunchFailed => 10,
             RunErrorCode::InternalFailure => 13,
         },

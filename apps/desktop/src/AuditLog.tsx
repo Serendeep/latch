@@ -164,6 +164,7 @@ function resultLabel(event: AuditEvent): string {
       : event.result === 11
         ? "Interrupted"
         : `Result ${event.result}`;
+  if (event.operation === 16 && event.result === 12) return "Command not found";
   if (event.operation === 18 && event.result === 3) return "Failed";
   if (event.result === 1) return "Succeeded";
   if (event.result === 2) return "Failed";

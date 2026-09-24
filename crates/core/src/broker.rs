@@ -23,6 +23,8 @@ pub enum BrokerError {
     InvalidSecret,
     /// A command request, executable, or project binding failed validation.
     InvalidRun,
+    /// The command, its `#!` interpreter, or its `env` target is not on the request's PATH.
+    CommandNotFound,
     /// A secret with this name already exists in the selected environment.
     SecretExists,
     /// The selected environment already contains 256 secrets.
@@ -37,7 +39,7 @@ pub enum BrokerError {
     StorageUnavailable,
     /// Another process already owns this vault directory.
     AlreadyRunning,
-    /// The qualified, unlocked GNOME login keyring is not available.
+    /// The qualified, unlocked operating-system credential store is not available.
     KeyStoreUnavailable,
     /// Durable audit metadata could not be written.
     AuditUnavailable,
@@ -522,6 +524,36 @@ impl Broker {
         }
     }
 
+    /// Reject a request whose command cannot be resolved, before any window or vault access.
+    /// Returns `CommandNotFound` and audits it; other resolution errors are returned unaudited
+    /// because `prepare_run` repeats resolution and reports them after review.
+    pub fn screen_run(
+        &self,
+        request: &protocol::RunRequest,
+        request_id: [u8; 16],
+        peer: crate::process::PeerIdentity,
+    ) -> Result<(), BrokerError> {
+        request.validate().map_err(|_| BrokerError::InvalidRun)?;
+        #[cfg(unix)]
+        {
+            match crate::process::resolve_launch(&request.executable, &request.path) {
+                Err(BrokerError::CommandNotFound) => {
+                    // The rejection stands even if its audit record cannot be written.
+                    let _ = self
+                        .worker()?
+                        .reject_request(request_id, request.agent, peer);
+                    Err(BrokerError::CommandNotFound)
+                }
+                result => result.map(|_| ()),
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (request_id, peer);
+            Err(BrokerError::Unsupported)
+        }
+    }
+
     /// Record a denial for one consumed review.
     pub fn deny_run(
         &self,
@@ -613,8 +645,8 @@ mod worker {
     use crate::{
         platform::KeyStore,
         process::{
-            ExecutableIdentity, LaunchReceipt, MissingSecretInput, PeerIdentity, PreparedRun,
-            ReviewedSecret, RunReview, into_parts,
+            LaunchReceipt, MissingSecretInput, PeerIdentity, PreparedRun, ReviewedSecret,
+            RunReview, into_parts, resolve_launch,
         },
         project::{DirectorySelection, Project, ProjectPage, hex, parse_id, random_id},
         project_store::ProjectRow,
@@ -703,6 +735,12 @@ mod worker {
             run: PreparedRun,
             epoch: u64,
             result: u8,
+            reply: SyncSender<Result<(), BrokerError>>,
+        },
+        RejectRequest {
+            request_id: [u8; 16],
+            agent: protocol::AgentKind,
+            peer: PeerIdentity,
             reply: SyncSender<Result<(), BrokerError>>,
         },
         LaunchRun {
@@ -1051,6 +1089,29 @@ mod worker {
             })
         }
 
+        // Needs no vault key: rejected requests are audited even while locked.
+        pub(super) fn reject_request(
+            &self,
+            request_id: [u8; 16],
+            agent: protocol::AgentKind,
+            peer: PeerIdentity,
+        ) -> Result<(), BrokerError> {
+            let (reply, receive) = mpsc::sync_channel(1);
+            self.sender
+                .as_ref()
+                .ok_or(BrokerError::StorageUnavailable)?
+                .try_send(Work::RejectRequest {
+                    request_id,
+                    agent,
+                    peer,
+                    reply,
+                })
+                .map_err(|_| BrokerError::Busy)?;
+            receive
+                .recv()
+                .map_err(|_| BrokerError::StorageUnavailable)?
+        }
+
         pub(super) fn launch_run(
             &self,
             run: PreparedRun,
@@ -1255,6 +1316,14 @@ mod worker {
                         shared.session.lock();
                     }
                     let _ = reply.send(result);
+                }
+                Work::RejectRequest {
+                    request_id,
+                    agent,
+                    peer,
+                    reply,
+                } => {
+                    let _ = reply.send(db.record_rejected_request(&request_id, agent, peer));
                 }
                 Work::DenyRun {
                     run,
@@ -1660,25 +1729,9 @@ mod worker {
         Err(BrokerError::InvalidRun)
     }
 
-    fn executable_identity(path: &std::path::Path) -> Result<ExecutableIdentity, BrokerError> {
-        use std::os::unix::fs::MetadataExt;
-        if !path.is_absolute() {
-            return Err(BrokerError::InvalidRun);
-        }
-        let metadata = path.metadata().map_err(|_| BrokerError::InvalidRun)?;
-        if !metadata.is_file() || metadata.mode() & 0o111 == 0 || metadata.mode() & 0o6000 != 0 {
-            return Err(BrokerError::InvalidRun);
-        }
-        Ok(ExecutableIdentity {
-            device: metadata.dev(),
-            inode: metadata.ino(),
-            length: metadata.len(),
-            modified_seconds: metadata.mtime(),
-            modified_nanoseconds: metadata.mtime_nsec(),
-        })
-    }
-
-    fn baseline_environment() -> Result<Vec<(String, std::ffi::OsString)>, BrokerError> {
+    fn baseline_environment(
+        search_path: &str,
+    ) -> Result<Vec<(String, std::ffi::OsString)>, BrokerError> {
         let mut values = Vec::new();
         for name in ["HOME", "TMPDIR", "LANG"] {
             if let Some(value) = std::env::var_os(name) {
@@ -1689,12 +1742,10 @@ mod worker {
                 values.push((name.into(), value));
             }
         }
-        if let Some(path) = std::env::var_os("PATH") {
-            if std::env::split_paths(&path).any(|entry| !entry.is_absolute()) {
-                return Err(BrokerError::InvalidRun);
-            }
-            values.push(("PATH".into(), path));
+        if !protocol::valid_search_path(search_path) {
+            return Err(BrokerError::InvalidRun);
         }
+        values.push(("PATH".into(), search_path.into()));
         for (name, value) in std::env::vars_os() {
             let Some(name) = name.to_str() else { continue };
             if name.starts_with("LC_") && name.len() <= 64 {
@@ -1712,7 +1763,8 @@ mod worker {
         peer: PeerIdentity,
         epoch: u64,
     ) -> Result<PreparedRun, BrokerError> {
-        let (agent, environment, locator, executable, args, shell, names) = into_parts(request);
+        let (agent, environment, locator, requested, args, shell, names, search_path) =
+            into_parts(request);
         let (project_row, project) = open_project(db, state, epoch, &locator)?;
         let environment_id = project
             .environments()
@@ -1720,15 +1772,12 @@ mod worker {
             .find(|item| item.kind() == environment)
             .map(|item| *item.id())
             .ok_or(BrokerError::InvalidRun)?;
-        let executable = std::path::Path::new(&executable)
-            .canonicalize()
-            .map_err(|_| BrokerError::InvalidRun)?;
-        let identity = executable_identity(&executable)?;
+        let plan = resolve_launch(&requested, &search_path)?;
         let directory = std::path::PathBuf::from(project.directory());
         if crate::project::checked_directory(&directory)?.as_str() != project.directory() {
             return Err(BrokerError::InvalidRun);
         }
-        let baseline = baseline_environment()?;
+        let baseline = baseline_environment(&search_path)?;
         if names.iter().any(|name| {
             baseline
                 .iter()
@@ -1768,10 +1817,6 @@ mod worker {
                 missing.push(name);
             }
         }
-        let executable_text = executable
-            .to_str()
-            .ok_or(BrokerError::InvalidRun)?
-            .to_owned();
         let project_revision = project_row.revision;
         let view = RunReview {
             id: hex(&request_id),
@@ -1780,7 +1825,8 @@ mod worker {
             project_name: project.name().to_owned(),
             directory: project.directory().to_owned(),
             environment,
-            executable: executable_text,
+            executable: requested.clone(),
+            launch: plan.steps()?,
             args: args.clone(),
             shell,
             secrets: summaries,
@@ -1793,8 +1839,9 @@ mod worker {
             environment_id,
             project_revision,
             directory,
-            executable,
-            executable_identity: identity,
+            requested,
+            search_path,
+            plan,
             args,
             agent,
             peer,
@@ -1828,7 +1875,7 @@ mod worker {
         missing: Vec<MissingSecretInput>,
         epoch: u64,
     ) -> Result<LaunchReceipt, BrokerError> {
-        use std::os::unix::process::ExitStatusExt;
+        use std::os::unix::process::{CommandExt, ExitStatusExt};
         use std::process::{Command, Stdio};
 
         let (row, project) = open_project(db, state, epoch, &hex(&run.project_id))?;
@@ -1839,7 +1886,8 @@ mod worker {
                 .environments()
                 .iter()
                 .any(|item| item.id() == &run.environment_id)
-            || executable_identity(&run.executable)? != run.executable_identity
+            || !resolve_launch(&run.requested, &run.search_path)
+                .is_ok_and(|current| current.same_files(&run.plan))
         {
             return Err(BrokerError::RevisionConflict);
         }
@@ -1857,7 +1905,7 @@ mod worker {
         if run.missing.iter().any(|name| !supplied.contains_key(name)) {
             return Err(BrokerError::InvalidSecret);
         }
-        let baseline = baseline_environment()?;
+        let baseline = baseline_environment(&run.search_path)?;
         let mut values = Vec::with_capacity(run.secrets.len() + run.missing.len());
         let mut new_rows = Vec::with_capacity(run.missing.len());
         let mut shared = state.lock().map_err(|_| BrokerError::StorageUnavailable)?;
@@ -1926,8 +1974,9 @@ mod worker {
         }
         let job_id = random_id()?;
         db.consume_launch(run, &new_rows, &job_id)?;
-        let mut command = Command::new(&run.executable);
+        let mut command = Command::new(&run.plan.program().target);
         command
+            .arg0(&run.requested)
             .args(&run.args)
             .current_dir(&run.directory)
             .env_clear()
@@ -2725,6 +2774,7 @@ mod tests {
                     executable: "/usr/bin/env".into(),
                     args: vec![],
                     shell: false,
+                    path: "/usr/bin:/bin".into(),
                 },
                 crate::project::random_id().unwrap(),
                 crate::process::PeerIdentity {
@@ -2746,6 +2796,7 @@ mod tests {
                     executable: "/usr/bin/env".into(),
                     args: vec![],
                     shell: false,
+                    path: "/usr/bin:/bin".into(),
                 },
                 crate::project::random_id().unwrap(),
                 crate::process::PeerIdentity {
@@ -2798,6 +2849,34 @@ mod tests {
                 epoch.clone(),
             )
             .unwrap();
+        let unknown = protocol::RunRequest {
+            protocol_version: protocol::VERSION,
+            agent: protocol::AgentKind::Codex,
+            project: project_id.clone(),
+            environment: protocol::Environment::Development,
+            names: vec!["SERVICE_TOKEN".into()],
+            executable: "latch-test-not-installed".into(),
+            args: vec![],
+            shell: false,
+            path: "/usr/bin:/bin".into(),
+        };
+        let unknown_id = crate::project::random_id().unwrap();
+        assert_eq!(
+            broker.screen_run(
+                &unknown,
+                unknown_id,
+                crate::process::PeerIdentity {
+                    uid: rustix::process::geteuid().as_raw(),
+                    pid: std::process::id(),
+                },
+            ),
+            Err(BrokerError::CommandNotFound)
+        );
+        let history = broker.audit_events(None, epoch.clone()).unwrap();
+        assert!(history.events.iter().any(|event| event.operation == 16
+            && event.result == 12
+            && event.request_id.as_deref() == Some(crate::project::hex(&unknown_id).as_str())
+            && event.project_id.is_none()));
         let marker = project_dir.path().join("launch-result");
         let request = protocol::RunRequest {
             protocol_version: protocol::VERSION,
@@ -2805,14 +2884,16 @@ mod tests {
             project: project_id.clone(),
             environment: protocol::Environment::Development,
             names: vec!["SERVICE_TOKEN".into(), "NEW_AGENT_TOKEN".into()],
-            executable: "/bin/sh".into(),
+            executable: "sh".into(),
             args: vec![
                 "-c".into(),
-                "printf '%s|%s' \"$SERVICE_TOKEN\" \"$NEW_AGENT_TOKEN\" > \"$1\"".into(),
+                "printf '%s|%s|%s' \"$SERVICE_TOKEN\" \"$NEW_AGENT_TOKEN\" \"$PATH\" > \"$1\""
+                    .into(),
                 "latch-test".into(),
                 marker.to_string_lossy().into_owned(),
             ],
             shell: true,
+            path: "/nonexistent/agent/bin:/usr/bin:/bin".into(),
         };
         let run = broker
             .prepare_run(
@@ -2826,6 +2907,8 @@ mod tests {
             )
             .unwrap();
         assert!(run.view().secrets.len() == 1 && run.view().missing == ["NEW_AGENT_TOKEN"]);
+        assert_eq!(run.view().executable, "sh");
+        assert!(run.view().launch[0].found.ends_with("/sh"));
         let new_value = password();
         let review_json = serde_json::to_string(run.view()).unwrap();
         assert!(!review_json.contains(secret_value.as_str()));
@@ -2846,7 +2929,11 @@ mod tests {
         }
         assert_eq!(
             std::fs::read_to_string(&marker).unwrap(),
-            format!("{}|{}", secret_value.as_str(), new_value.as_str())
+            format!(
+                "{}|{}|/nonexistent/agent/bin:/usr/bin:/bin",
+                secret_value.as_str(),
+                new_value.as_str()
+            )
         );
         let listed = broker
             .secrets(

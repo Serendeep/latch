@@ -63,6 +63,7 @@ fn run_error(error: BrokerError) -> RunErrorCode {
             RunErrorCode::StaleReview
         }
         BrokerError::LaunchFailed => RunErrorCode::LaunchFailed,
+        BrokerError::CommandNotFound => RunErrorCode::CommandNotFound,
         _ => RunErrorCode::InternalFailure,
     }
 }
@@ -121,6 +122,12 @@ fn handle_agent(
             .map_err(|_| RunErrorCode::BrokerUnavailable)?;
         let request = latch_core::transport::read_message(&mut stream)
             .map_err(|_| RunErrorCode::StaleReview)?;
+        let mut request_id = [0; 16];
+        getrandom::fill(&mut request_id).map_err(|_| RunErrorCode::InternalFailure)?;
+        // Nothing the user could approve: answer the agent without showing a window.
+        broker
+            .screen_run(&request, request_id, peer)
+            .map_err(run_error)?;
         let _intake = requests
             .intake
             .try_lock()
@@ -158,8 +165,6 @@ fn handle_agent(
             }
             std::thread::sleep(Duration::from_millis(100));
         };
-        let mut request_id = [0; 16];
-        getrandom::fill(&mut request_id).map_err(|_| RunErrorCode::InternalFailure)?;
         let run = broker
             .prepare_run(request, request_id, peer, status.lock_epoch.clone())
             .map_err(|error| {

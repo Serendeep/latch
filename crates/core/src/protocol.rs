@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, fmt, str::FromStr};
 
 /// Only this version is understood by this build.
-pub const VERSION: u16 = 1;
+pub const VERSION: u16 = 2;
 /// Maximum encoded request size, checked before JSON decoding.
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
 
@@ -75,6 +75,16 @@ impl FromStr for Environment {
     }
 }
 
+/// Absolute, non-empty `PATH` entries only: an empty or relative entry would resolve against the
+/// working directory at run time and could differ from what was reviewed.
+pub(crate) fn valid_search_path(path: &str) -> bool {
+    !path.is_empty()
+        && path.len() <= 8192
+        && !path.contains('\0')
+        && path.split(':').count() <= 256
+        && path.split(':').all(|entry| entry.starts_with('/'))
+}
+
 pub(crate) fn valid_variable_name(name: &str) -> bool {
     let mut bytes = name.bytes();
     name.len() <= 128
@@ -98,12 +108,14 @@ pub struct RunRequest {
     pub environment: Environment,
     /// Names only. An empty list requires GUI selection, never implicit bulk access.
     pub names: Vec<String>,
-    /// Executable name/path; future dispatch must resolve it before review.
+    /// Command name as typed, or an absolute path. Bare names are resolved on `path` by the broker.
     pub executable: String,
     /// Literal ordered arguments. These are never logged or echoed.
     pub args: Vec<String>,
     /// Explicit acknowledgment of interpreter semantics; does not select a shell.
     pub shell: bool,
+    /// The caller's `PATH`: used to resolve the command and given unchanged to the child.
+    pub path: String,
 }
 
 /// Closed response from the local broker. It can never contain a credential value.
@@ -136,6 +148,8 @@ pub enum RunErrorCode {
     QueueFull,
     /// The reviewed request became stale.
     StaleReview,
+    /// The command, its interpreter, or its `env` target is not on the request's `PATH`.
+    CommandNotFound,
     /// The executable could not be launched.
     LaunchFailed,
     /// Storage, audit, or integrity validation failed.
@@ -168,6 +182,7 @@ impl RunRequest {
             || self.args.len() > 256
             || self.args.iter().any(|arg| !bounded_text(arg))
             || self.names.len() > 64
+            || !valid_search_path(&self.path)
         {
             return Err(InvalidRequest);
         }
@@ -200,7 +215,29 @@ mod tests {
             executable: "node".into(),
             args: vec!["--version".into()],
             shell: false,
+            path: "/usr/local/bin:/usr/bin:/bin".into(),
         }
+    }
+
+    #[test]
+    fn rejects_relative_empty_and_unbounded_search_paths() {
+        for path in [
+            "",
+            "bin:/usr/bin",
+            "/usr/bin::/bin",
+            "/usr/bin:",
+            ".",
+            "/a\0b",
+        ] {
+            let mut r = request();
+            r.path = path.into();
+            assert!(r.validate().is_err(), "Unsafe PATH accepted");
+        }
+        let mut r = request();
+        r.path = vec!["/x"; 257].join(":");
+        assert!(r.validate().is_err(), "Too many PATH entries accepted");
+        r.path = "/opt/homebrew/bin:/usr/bin".into();
+        assert!(r.validate().is_ok());
     }
 
     #[test]

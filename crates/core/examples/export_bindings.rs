@@ -3,7 +3,7 @@ use latch_core::{
     AppStatus, VaultAvailability,
     audit::{AuditEvent, AuditPage},
     import::FileReview,
-    process::{LaunchReceipt, RunReview},
+    process::{LaunchReceipt, LaunchRole, LaunchStep, RunReview},
     project::{DirectorySelection, ProjectPage, ProjectSummary},
     protocol::{AgentKind, Environment},
     secret::SecretSummary,
@@ -28,6 +28,8 @@ fn main() {
             DirectorySelection::decl(&config),
             SecretSummary::decl(&config),
             FileReview::decl(&config),
+            LaunchRole::decl(&config),
+            LaunchStep::decl(&config),
             RunReview::decl(&config),
             LaunchReceipt::decl(&config),
         ]

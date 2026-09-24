@@ -25,7 +25,15 @@ test("project creation, explicit scope deletion, accessible confirmation, and lo
           project_name: "Renamed workspace",
           directory: "/tmp/latch-example-project",
           environment: "development",
-          executable: "/usr/bin/node",
+          executable: "node",
+          launch: [
+            {
+              role: "program",
+              found: "/usr/local/bin/node",
+              target: "/usr/local/lib/nodejs/v24.15.0/bin/node",
+              may_select_runtime: false,
+            },
+          ],
           args: ["scripts/check-connection.mjs"],
           shell: false,
           secrets: [
@@ -274,7 +282,18 @@ test("project creation, explicit scope deletion, accessible confirmation, and lo
       await expect(
         agentDialog.getByRole("button", { name: "Approve and run once" }),
       ).toBeInViewport();
-      await expect(agentDialog.getByLabel("SERVICE_TOKEN")).toBeInViewport();
+      // What runs is shown before the entry form; a field below the fold is announced in the footer.
+      await expect(
+        agentDialog.getByText("/usr/local/bin/node"),
+      ).toBeInViewport();
+      await expect(
+        agentDialog.getByText(
+          "Enter 1 missing value in the form before approving.",
+        ),
+      ).toBeInViewport();
+      const field = agentDialog.getByLabel("SERVICE_TOKEN");
+      if (width === 420) await field.scrollIntoViewIfNeeded();
+      await expect(field).toBeInViewport();
       expect(
         await page.evaluate(
           () => document.documentElement.scrollWidth <= window.innerWidth,
