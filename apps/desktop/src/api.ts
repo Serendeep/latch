@@ -27,6 +27,8 @@ import type {
   FileReview,
   LaunchReceipt,
   RunReview,
+  BackupReceipt,
+  RestorePreview,
 } from "./generated/core";
 
 export type RevealedSecret = { id: string; revision: string; value: string };
@@ -64,6 +66,38 @@ export function renameProject(
 ): Promise<ProjectPage> {
   return invoke("project_rename", { lockEpoch, id, revision, name });
 }
+export function relinkProject(
+  lockEpoch: string,
+  id: string,
+  revision: string,
+  token: string,
+): Promise<ProjectPage> {
+  return invoke("project_relink", { lockEpoch, id, revision, token });
+}
+
+/** The backup password crosses IPC once. A null result means the dialog was cancelled. */
+export function exportBackup(
+  lockEpoch: string,
+  password: string,
+): Promise<BackupReceipt | null> {
+  return invoke("backup_export", { lockEpoch, password });
+}
+
+export function previewRestore(
+  lockEpoch: string,
+  password: string,
+): Promise<RestorePreview | null> {
+  return invoke("restore_preview", { lockEpoch, password });
+}
+
+export function commitRestore(
+  lockEpoch: string,
+  token: string,
+  confirmed: boolean,
+): Promise<BackupReceipt> {
+  return invoke("restore_commit", { lockEpoch, token, confirmed });
+}
+
 export function deleteProject(
   lockEpoch: string,
   id: string,

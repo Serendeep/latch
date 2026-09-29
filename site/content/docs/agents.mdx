@@ -40,4 +40,4 @@ The agent label is self-reported audit context, not proof of identity. Requests 
 
 ## When a request fails
 
-If Latch is unavailable, start the desktop application. If the project is unknown, register its directory in the manager. Unlock the vault in the popup when prompted. A denied or expired request needs a new user decision; agents must not retry it automatically. Exit code 12 (`command_not_found`) means the command, its interpreter, or the program `env` starts is not on the requesting `PATH`. No popup is shown and the rejection is recorded in the audit history.
+If Latch is unavailable, start the desktop application. If the project is unknown, register its directory in the manager. A project restored from a backup matches no request until you choose **Confirm directory…** for it. Unlock the vault in the popup when prompted. A denied or expired request needs a new user decision; agents must not retry it automatically. Exit code 12 (`command_not_found`) means the command, its interpreter, or the program `env` starts is not on the requesting `PATH`. No popup is shown and the rejection is recorded in the audit history.

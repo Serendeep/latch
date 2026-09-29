@@ -6,7 +6,7 @@ title: "Security model"
 
 The intended design protects confidential vault records at rest using established authenticated encryption, with key-unwrapping material protected by an explicitly supported OS credential store. The Linux creation/unlock path is implemented but has not been independently reviewed. Linux unlocking requires a separate Latch passphrase. The core wrapping implementation uses Argon2id v19 with that passphrase and OS-held random material as its standard secret input, then XChaCha20-Poly1305 to wrap the vault key. Its fixed profile uses 64 MiB, three passes, and four lanes. SQLite stores the wrapped key, encrypted project records, and allowlisted structural/audit metadata. Device material is stored in the explicitly selected GNOME login collection. Unsupported providers and unprotected collection formats fail closed.
 
-If an attacker obtains both a wrapped key and device material, offline passphrase guessing remains possible. Losing either unlock factor prevents normal unlock; recovery is not implemented. Application-owned sensitive buffers are wiped on drop, but this does not guarantee removal of compiler copies, library or OS buffers, swap, or crash dumps.
+If an attacker obtains both a wrapped key and device material, offline passphrase guessing remains possible. Losing either unlock factor prevents normal unlock; the encrypted backup below is the recovery path. Application-owned sensitive buffers are wiped on drop, but this does not guarantee removal of compiler copies, library or OS buffers, swap, or crash dumps.
 
 Approval controls which values Latch delivers to a selected process. It cannot prevent that process from reading or leaking them. It does not contain malicious software running as the same user, compromised operating systems, administrators, or approved code. Locking cannot retract a value already delivered.
 
@@ -20,7 +20,7 @@ Project names, canonical directory paths, and environment kinds/identities share
 
 Directory-selection tokens are single-use, expire after five minutes, and are invalidated on lock or successful unlock. An unlock advances the session epoch so earlier requests cannot apply to the new session. Listing responses contain at most 20 projects and no secret values. Mutations check uniqueness in Rust across at most 100 decrypted metadata records, releasing the session lock between records. A returned page or native picker may already have shown metadata before a lock; locking cannot erase what a person or compromised renderer has observed. The GUI discards its project state on lock and ignores late results.
 
-Canonical directory checks reject traversal and lossy path decoding. The Linux broker revalidates the encrypted project binding, environment identity, project and secret revisions, executable identity, and canonical directory before launch. This narrows review-to-use replacement but cannot prevent changes to executable content that preserve the checked filesystem metadata, runtime library or interpreter changes, or changes after process creation. Weekly audit rotation, portable recovery, and authenticated agent identity are still pending.
+Canonical directory checks reject traversal and lossy path decoding. The Linux broker revalidates the encrypted project binding, environment identity, project and secret revisions, executable identity, and canonical directory before launch. This narrows review-to-use replacement but cannot prevent changes to executable content that preserve the checked filesystem metadata, runtime library or interpreter changes, or changes after process creation. Weekly audit rotation and authenticated agent identity are still pending.
 
 ## Agent request and process boundary
 
@@ -34,7 +34,15 @@ Approval is consumed before the operating system spawn call so a failed or ambig
 
 Dependencies and toolchains are pinned in manifests and lockfiles. CI includes dependency audits and secret scanning with full value redaction. Tauri's Linux dependency graph currently includes unmaintained GTK3 bindings and a [GLib soundness advisory](https://rustsec.org/advisories/RUSTSEC-2024-0429). These findings remain visible and require review before release.
 
-No signed release or updater exists. Releases ship only on platforms whose key-store and launch behavior were exercised. Latch has not had an external security review, and no release claims that its cryptography, IPC, approval handling, recovery, or launch behavior has been independently verified. Automated checks alone do not establish those properties.
+Releases are not signed and there is no updater; verify downloads against the published `SHA256SUMS`. Releases ship only on platforms whose key-store and launch behavior were exercised. Latch has not had an external security review, and no release claims that its cryptography, IPC, approval handling, recovery, or launch behavior has been independently verified. Automated checks alone do not establish those properties.
+
+## Backups
+
+A backup is a single file protected only by its backup password. There is no device factor, so it can be restored on another machine. The password must be at least 15 characters. It derives a key with Argon2id v1.3 (64 MiB, three passes, four lanes) and a fresh random salt. The payload is encrypted with XChaCha20-Poly1305 under a fresh random nonce. The whole fixed header (format, KDF profile, salt, nonce, backup ID and length) is authenticated. Restore rejects any other KDF profile, a length mismatch, or a file over the 64 MiB payload ceiling before it derives a key, so a crafted file can't demand extra memory. It authenticates the whole payload before parsing it, then validates every record as if it were new input.
+
+Save and open dialogs run in Rust; the webview never supplies a path. Exports are written to a private temporary file (mode 0600) and renamed into place, so a failed export doesn't replace an earlier backup. Restore is a preview and a confirmation. The preview decrypts the backup and immediately re-encrypts every record under this vault's key with new identities. Only that ciphertext is kept, for at most five minutes. Confirmation writes all projects, secrets and their audit events in one SQLite transaction. Locking, expiry, cancellation or a name/directory conflict writes nothing. Restored projects are unconfirmed: agent requests never match them until you choose the directory on this machine.
+
+A backup file can't be revoked. Changing the backup password protects only later exports. Anyone who has the file can guess passwords offline, limited only by Argon2id's cost, so the password's strength is the whole protection. Same-user software can read the file like any other.
 
 ## Configuration import
 

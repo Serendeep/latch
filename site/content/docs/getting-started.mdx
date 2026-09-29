@@ -2,7 +2,41 @@
 title: "Getting started"
 ---
 
-Install [mise](https://mise.jdx.dev/getting-started.html) and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/). On Linux, you also need a running, unlocked GNOME login keyring protected by a nonempty password.
+Latch runs on Linux (x86_64). It stores its device key in the GNOME Keyring, so you need `gnome-keyring` running with a **password-protected login keyring**. GNOME provides this by default. Other desktops (Sway, Hyprland, niri, XFCE) work when `gnome-keyring-daemon` is started with your session and the login keyring is unlocked at login. KDE Wallet and KeePassXC are not supported yet. macOS and Windows are not supported yet.
+
+## Install
+
+Download a package from the [latest release](https://github.com/Serendeep/latch/releases/latest) and check it against `SHA256SUMS`:
+
+- **Debian and Ubuntu:** `sudo apt install ./Latch_*_amd64.deb`
+- **Fedora:** `sudo dnf install ./Latch-*.x86_64.rpm`
+
+Both install the desktop app (`latch-desktop`, listed as **Latch** in your app launcher) and the `latch` command-line tool that agents use.
+
+- **Other distributions:** use the `.AppImage` for the desktop app, and put the `latch-linux-x86_64` file on your `PATH` as `latch`:
+
+  ```sh
+  install -m 755 latch-linux-x86_64 ~/.local/bin/latch
+  chmod +x Latch_*_amd64.AppImage
+  ```
+
+Releases are not signed yet. There is no automatic updater, so install a newer package the same way.
+
+## Create your vault
+
+Start Latch. Choose a separate Latch passphrase of at least 15 characters, then unlock the vault. Add a project and choose its directory. Each project starts with development, test, staging, and production environments.
+
+There is no passphrase reset. After you add secrets, save an encrypted backup from the **Backup** tab and keep its password somewhere other than the backup file. See [backups](./vault.mdx#backups).
+
+## Start with your session
+
+The vault locks after five minutes. Closing the manager locks it and leaves Latch running in the tray. To start Latch with your session, add `latch-desktop --background` (or `Latch_*.AppImage --background`) to your startup applications. It starts locked. Tray visibility depends on desktop support.
+
+Next, [connect your coding agent](./agents.mdx).
+
+## Build from source
+
+Install [mise](https://mise.jdx.dev/getting-started.html) and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/), then:
 
 ```sh
 git clone https://github.com/Serendeep/latch.git
@@ -13,20 +47,4 @@ mise exec -- pnpm install --frozen-lockfile
 mise exec -- pnpm desktop:dev
 ```
 
-## Create your vault
-
-Choose a separate Latch passphrase of at least 15 characters, then unlock the vault. Add a project and choose its directory. Each project starts with development, test, staging, and production environments.
-
-There is no passphrase reset or portable backup recovery yet. Use generated test credentials and retain an independent copy of anything you need.
-
-## Start with your session
-
-The vault locks after five minutes. Closing the manager locks it and leaves Latch running in the tray. Add an installed build's `latch-desktop --background` command to your Linux startup applications to start with your session. It starts locked. Tray visibility depends on desktop support.
-
-## Build the CLI
-
-```sh
-mise exec -- cargo build -p latch-cli --release
-```
-
-Put `target/release/latch` on your PATH, then follow the [agent guide](./agents.mdx).
+Build the CLI with `mise exec -- cargo build -p latch-cli --release` and put `target/release/latch` on your `PATH`.

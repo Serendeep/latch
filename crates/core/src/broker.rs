@@ -9,6 +9,12 @@ use std::{path::PathBuf, time::Duration};
 pub enum BrokerError {
     /// The selected file is invalid, unsupported, or exceeds import limits.
     InvalidImport,
+    /// The file is not a supported Latch backup, or its records failed validation.
+    InvalidBackup,
+    /// Wrong backup password, or the backup was modified after export.
+    BackupAuthentication,
+    /// The backup file could not be read or written.
+    BackupFileUnavailable,
     /// The review expired, changed scope, or was already consumed.
     InvalidReview,
     /// Project input failed validation.
@@ -106,6 +112,15 @@ pub enum ProjectCommand {
         revision: String,
         /// New display name.
         name: String,
+    },
+    /// Bind a directory chosen on this machine, confirming a restored project.
+    Relink {
+        /// Project identity.
+        id: String,
+        /// Expected decimal revision.
+        revision: String,
+        /// Single-use chooser token.
+        token: String,
     },
     /// Delete a reviewed project. IPC adapter must require explicit confirmation.
     Delete {
@@ -372,6 +387,17 @@ impl Broker {
                     return Err(BrokerError::InvalidProject);
                 }
             }
+            ProjectCommand::Relink {
+                id,
+                revision,
+                token,
+            } => {
+                crate::project::parse_id(id)?;
+                crate::project::parse_id(token)?;
+                if revision.len() > 19 {
+                    return Err(BrokerError::InvalidProject);
+                }
+            }
             ProjectCommand::List { cursor } => {
                 if let Some(cursor) = cursor {
                     crate::project::parse_id(cursor)?;
@@ -385,6 +411,67 @@ impl Broker {
         #[cfg(not(unix))]
         {
             let _ = (command, epoch);
+            Err(BrokerError::Unsupported)
+        }
+    }
+
+    /// Export every project and secret to a path from a native save dialog. Call from a
+    /// blocking task: the backup key derivation takes about a second.
+    pub fn backup_export(
+        &self,
+        path: PathBuf,
+        password: String,
+        epoch: String,
+    ) -> Result<crate::project::BackupReceipt, BrokerError> {
+        let password =
+            Passphrase::from_input(password).map_err(|_| BrokerError::InvalidPassphrase)?;
+        #[cfg(unix)]
+        {
+            self.worker()?.backup_export(path, password, epoch)
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (path, password, epoch);
+            Err(BrokerError::Unsupported)
+        }
+    }
+
+    /// Decrypt a backup from a native open dialog and hold it, re-sealed under this vault's
+    /// key, for one confirmed commit. Returns names only. Call from a blocking task.
+    pub fn restore_preview(
+        &self,
+        path: PathBuf,
+        password: String,
+        epoch: String,
+    ) -> Result<crate::project::RestorePreview, BrokerError> {
+        let password =
+            Passphrase::from_input(password).map_err(|_| BrokerError::BackupAuthentication)?;
+        #[cfg(unix)]
+        {
+            self.worker()?.restore_preview(path, password, epoch)
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (path, password, epoch);
+            Err(BrokerError::Unsupported)
+        }
+    }
+
+    /// Add the reviewed backup's projects in one transaction, or discard the review.
+    pub fn restore_commit(
+        &self,
+        token: String,
+        confirmed: bool,
+        epoch: String,
+    ) -> Result<crate::project::BackupReceipt, BrokerError> {
+        crate::project::parse_id(&token).map_err(|_| BrokerError::InvalidReview)?;
+        #[cfg(unix)]
+        {
+            self.worker()?.restore_commit(token, confirmed, epoch)
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (token, confirmed, epoch);
             Err(BrokerError::Unsupported)
         }
     }
@@ -658,12 +745,16 @@ impl Broker {
 mod worker {
     use super::*;
     use crate::{
+        backup::{BackupEnvironment, BackupError, BackupProject, BackupSecret, Payload},
         platform::KeyStore,
         process::{
             LaunchReceipt, MissingSecretInput, PeerIdentity, PreparedRun, ReviewedSecret,
             RunReview, into_parts, resolve_launch,
         },
-        project::{DirectorySelection, Project, ProjectPage, hex, parse_id, random_id},
+        project::{
+            BackupReceipt, DirectorySelection, Project, ProjectPage, RestorePreview,
+            RestoredProject, hex, parse_id, random_id,
+        },
         project_store::ProjectRow,
         secret::{RevealedSecret, SealedSecret, SecretMetadata, SecretScope, SecretValue},
         secret_store::SecretRow,
@@ -688,6 +779,16 @@ mod worker {
         rows: Vec<SecretRow>,
     }
 
+    /// A decrypted backup re-sealed under this vault's key. Only ciphertext and the names
+    /// needed to re-check conflicts at commit stay in memory.
+    struct RestoreReview {
+        token: String,
+        created: std::time::Instant,
+        projects: Vec<ProjectRow>,
+        secrets: Vec<SecretRow>,
+        identities: Vec<(zeroize::Zeroizing<String>, zeroize::Zeroizing<String>)>,
+    }
+
     struct Shared {
         session: VaultSession,
         exists: bool,
@@ -697,6 +798,7 @@ mod worker {
         lock_event: Option<i64>,
         selection: Option<(String, zeroize::Zeroizing<String>, std::time::Instant)>,
         import_review: Option<ImportReview>,
+        restore_review: Option<RestoreReview>,
     }
     impl Shared {
         fn unlocked(&mut self) -> bool {
@@ -707,11 +809,19 @@ mod worker {
             {
                 self.import_review = None;
             }
+            if self
+                .restore_review
+                .as_ref()
+                .is_some_and(|review| review.created.elapsed() >= Duration::from_secs(300))
+            {
+                self.restore_review = None;
+            }
             let had_key = self.session.has_key();
             let unlocked = self.session.is_unlocked();
             if had_key && !unlocked {
                 self.selection = None;
                 self.import_review = None;
+                self.restore_review = None;
                 self.lock_event.get_or_insert_with(now_ms);
             }
             unlocked
@@ -764,6 +874,24 @@ mod worker {
             epoch: u64,
             reply: SyncSender<Result<LaunchReceipt, BrokerError>>,
         },
+        BackupExport {
+            path: PathBuf,
+            password: Passphrase,
+            epoch: u64,
+            reply: SyncSender<Result<BackupReceipt, BrokerError>>,
+        },
+        RestorePreview {
+            path: PathBuf,
+            password: Passphrase,
+            epoch: u64,
+            reply: SyncSender<Result<RestorePreview, BrokerError>>,
+        },
+        RestoreCommit {
+            token: String,
+            confirmed: bool,
+            epoch: u64,
+            reply: SyncSender<Result<BackupReceipt, BrokerError>>,
+        },
         JobExit {
             job_id: [u8; 16],
             exit_code: Option<i32>,
@@ -793,6 +921,7 @@ mod worker {
                 lock_event: None,
                 selection: None,
                 import_review: None,
+                restore_review: None,
             }));
             let busy = Arc::new(AtomicBool::new(false));
             let (sender, receiver) = mpsc::sync_channel(8);
@@ -1192,6 +1321,60 @@ mod worker {
             })
         }
 
+        pub(super) fn backup_export(
+            &self,
+            path: PathBuf,
+            password: Passphrase,
+            epoch: String,
+        ) -> Result<BackupReceipt, BrokerError> {
+            let epoch = parse_epoch(&epoch)?;
+            self.run_work(epoch, |reply| Work::BackupExport {
+                path,
+                password,
+                epoch,
+                reply,
+            })
+        }
+
+        pub(super) fn restore_preview(
+            &self,
+            path: PathBuf,
+            password: Passphrase,
+            epoch: String,
+        ) -> Result<RestorePreview, BrokerError> {
+            let epoch = parse_epoch(&epoch)?;
+            let preview = self.run_work(epoch, |reply| Work::RestorePreview {
+                path,
+                password,
+                epoch,
+                reply,
+            })?;
+            // A lock after worker completion still prevents disclosing the names.
+            check_project_state(
+                &mut *self
+                    .state
+                    .lock()
+                    .map_err(|_| BrokerError::StorageUnavailable)?,
+                epoch,
+            )?;
+            Ok(preview)
+        }
+
+        pub(super) fn restore_commit(
+            &self,
+            token: String,
+            confirmed: bool,
+            epoch: String,
+        ) -> Result<BackupReceipt, BrokerError> {
+            let epoch = parse_epoch(&epoch)?;
+            self.run_work(epoch, |reply| Work::RestoreCommit {
+                token,
+                confirmed,
+                epoch,
+                reply,
+            })
+        }
+
         fn run_work<T>(
             &self,
             epoch: u64,
@@ -1233,6 +1416,7 @@ mod worker {
                 state.session.lock();
                 state.selection = None;
                 state.import_review = None;
+                state.restore_review = None;
                 match state.epoch.checked_add(1) {
                     Some(epoch) => state.epoch = epoch,
                     None => state.failure = Some(BrokerError::InvalidState),
@@ -1310,6 +1494,7 @@ mod worker {
                             shared.session.lock();
                             shared.selection = None;
                             shared.import_review = None;
+                            shared.restore_review = None;
                         }
                         if matches!(
                             result,
@@ -1335,6 +1520,7 @@ mod worker {
                         shared.session.lock();
                         shared.selection = None;
                         shared.import_review = None;
+                        shared.restore_review = None;
                     }
                     let _ = reply.send(result);
                 }
@@ -1365,6 +1551,7 @@ mod worker {
                         shared.session.lock();
                         shared.selection = None;
                         shared.import_review = None;
+                        shared.restore_review = None;
                     }
                     let _ = reply.send(result);
                 }
@@ -1441,6 +1628,36 @@ mod worker {
                     }
                     let _ = reply.send(result);
                 }
+                Work::BackupExport {
+                    path,
+                    password,
+                    epoch,
+                    reply,
+                } => {
+                    let result = export_backup(&db, &state, &path, password, epoch);
+                    record_failure(&state, &result);
+                    let _ = reply.send(result);
+                }
+                Work::RestorePreview {
+                    path,
+                    password,
+                    epoch,
+                    reply,
+                } => {
+                    let result = preview_restore(&mut db, &state, &path, password, epoch);
+                    record_failure(&state, &result);
+                    let _ = reply.send(result);
+                }
+                Work::RestoreCommit {
+                    token,
+                    confirmed,
+                    epoch,
+                    reply,
+                } => {
+                    let result = commit_restore(&mut db, &state, &token, confirmed, epoch);
+                    record_failure(&state, &result);
+                    let _ = reply.send(result);
+                }
                 Work::JobExit {
                     job_id,
                     exit_code,
@@ -1460,6 +1677,20 @@ mod worker {
         }
     }
 
+    /// Storage and audit failures stop the session, as for every other vault mutation.
+    fn record_failure<T>(state: &Mutex<Shared>, result: &Result<T, BrokerError>) {
+        if let Err(error @ (BrokerError::AuditUnavailable | BrokerError::StorageUnavailable)) =
+            result
+        {
+            let mut shared = state.lock().unwrap_or_else(|e| e.into_inner());
+            shared.failure = Some(*error);
+            shared.session.lock();
+            shared.selection = None;
+            shared.import_review = None;
+            shared.restore_review = None;
+        }
+    }
+
     fn flush_locks(db: &Database, state: &Mutex<Shared>) {
         let mut shared = state.lock().unwrap_or_else(|e| e.into_inner());
         let was_unlocked = shared.session.has_key();
@@ -1473,6 +1704,7 @@ mod worker {
             shared.session.lock();
             shared.selection = None;
             shared.import_review = None;
+            shared.restore_review = None;
         }
     }
 
@@ -1489,6 +1721,7 @@ mod worker {
             failure: None,
             lock_event: None,
             import_review: None,
+            restore_review: None,
             selection: Some((
                 "a".repeat(32),
                 zeroize::Zeroizing::new("/tmp/example".into()),
@@ -1541,6 +1774,7 @@ mod worker {
         if !shared.unlocked() {
             shared.selection = None;
             shared.import_review = None;
+            shared.restore_review = None;
             return Err(BrokerError::Cancelled);
         }
         Ok(())
@@ -1603,16 +1837,7 @@ mod worker {
                 if projects.len() >= 100 {
                     return Err(BrokerError::ProjectLimit);
                 }
-                let directory = {
-                    let mut shared = state.lock().map_err(|_| BrokerError::StorageUnavailable)?;
-                    check_project_state(&mut shared, epoch)?;
-                    let (expected, directory, at) =
-                        shared.selection.take().ok_or(BrokerError::InvalidProject)?;
-                    if token != expected || at.elapsed() >= Duration::from_secs(300) {
-                        return Err(BrokerError::InvalidProject);
-                    }
-                    directory
-                };
+                let directory = take_selection(state, epoch, &token)?;
                 let project = Project::create(name, std::path::Path::new(directory.as_str()))?;
                 if project.directory() != directory.as_str() {
                     return Err(BrokerError::InvalidProject);
@@ -1623,6 +1848,7 @@ mod worker {
                 let (id, revision) = match &command {
                     ProjectCommand::Rename { id, revision, .. }
                     | ProjectCommand::Delete { id, revision }
+                    | ProjectCommand::Relink { id, revision, .. }
                     | ProjectCommand::Environment { id, revision, .. } => (parse_id(id)?, revision),
                     _ => return Err(BrokerError::InvalidProject),
                 };
@@ -1645,6 +1871,13 @@ mod worker {
                     }
                     ProjectCommand::Rename { name, revision, .. } => {
                         project.rename(name, &revision)?;
+                        (project, Some(previous), 5, None)
+                    }
+                    ProjectCommand::Relink {
+                        revision, token, ..
+                    } => {
+                        let directory = take_selection(state, epoch, &token)?;
+                        project.relink(directory, &revision)?;
                         (project, Some(previous), 5, None)
                     }
                     ProjectCommand::Environment {
@@ -1724,6 +1957,22 @@ mod worker {
         })
     }
 
+    /// Consume the session's single native directory selection if the token still matches.
+    fn take_selection(
+        state: &Mutex<Shared>,
+        epoch: u64,
+        token: &str,
+    ) -> Result<zeroize::Zeroizing<String>, BrokerError> {
+        let mut shared = state.lock().map_err(|_| BrokerError::StorageUnavailable)?;
+        check_project_state(&mut shared, epoch)?;
+        let (expected, directory, at) =
+            shared.selection.take().ok_or(BrokerError::InvalidProject)?;
+        if token != expected || at.elapsed() >= Duration::from_secs(300) {
+            return Err(BrokerError::InvalidProject);
+        }
+        Ok(directory)
+    }
+
     fn project_environment(
         db: &Database,
         state: &Mutex<Shared>,
@@ -1788,10 +2037,12 @@ mod worker {
                 .map_err(|_| BrokerError::StorageUnavailable)?;
             let project = Project::decode(row.id, row.revision, &bytes)
                 .map_err(|_| BrokerError::StorageUnavailable)?;
-            let matches = locator_id == Some(row.id)
-                || locator_path
-                    .as_ref()
-                    .is_some_and(|path| path.as_str() == project.directory());
+            // A restored project matches nothing until its directory is chosen on this machine.
+            let matches = project.directory_confirmed()
+                && (locator_id == Some(row.id)
+                    || locator_path
+                        .as_ref()
+                        .is_some_and(|path| path.as_str() == project.directory()));
             drop(shared);
             if matches {
                 return Ok((row, project));
@@ -2485,6 +2736,314 @@ mod worker {
         )?))
     }
 
+    fn backup_error(error: BackupError) -> BrokerError {
+        match error {
+            BackupError::Invalid => BrokerError::InvalidBackup,
+            BackupError::Authentication => BrokerError::BackupAuthentication,
+            BackupError::CryptoUnavailable => BrokerError::StorageUnavailable,
+        }
+    }
+
+    fn decrypt_projects(
+        db: &Database,
+        state: &Mutex<Shared>,
+        epoch: u64,
+    ) -> Result<Vec<Project>, BrokerError> {
+        let rows = db.project_rows(None, 101)?;
+        if rows.len() > 100 {
+            return Err(BrokerError::StorageUnavailable);
+        }
+        let mut shared = state.lock().map_err(|_| BrokerError::StorageUnavailable)?;
+        check_project_state(&mut shared, epoch)?;
+        let key = shared.session.key().ok_or(BrokerError::Cancelled)?;
+        rows.into_iter()
+            .map(|row| {
+                if key.key_id() != &row.key_id {
+                    return Err(BrokerError::StorageUnavailable);
+                }
+                let mut bytes = zeroize::Zeroizing::new(row.ciphertext);
+                key.record(false, &row.id, row.revision, &row.nonce, &mut bytes)
+                    .map_err(|_| BrokerError::StorageUnavailable)?;
+                Project::decode(row.id, row.revision, &bytes)
+                    .map_err(|_| BrokerError::StorageUnavailable)
+            })
+            .collect()
+    }
+
+    fn export_backup(
+        db: &Database,
+        state: &Mutex<Shared>,
+        path: &std::path::Path,
+        password: Passphrase,
+        epoch: u64,
+    ) -> Result<BackupReceipt, BrokerError> {
+        use zeroize::Zeroizing;
+        // Fail before any decryption or key derivation if the export could not be audited.
+        db.audit_capacity()?;
+        let projects = decrypt_projects(db, state, epoch)?;
+        let mut payload = Payload {
+            version: 1,
+            projects: Vec::with_capacity(projects.len()),
+        };
+        let mut secret_count = 0;
+        for project in &projects {
+            let mut environments = Vec::with_capacity(project.environments().len());
+            for environment in project.environments() {
+                let listed = db.secret_metadata_rows(project.id(), environment.id())?;
+                let mut secrets = Vec::with_capacity(listed.len());
+                for listed in listed {
+                    let row = db
+                        .secret_row(project.id(), environment.id(), &listed.id)?
+                        .ok_or(BrokerError::StorageUnavailable)?;
+                    let mut shared = state.lock().map_err(|_| BrokerError::StorageUnavailable)?;
+                    check_project_state(&mut shared, epoch)?;
+                    let key = shared.session.key().ok_or(BrokerError::Cancelled)?;
+                    if key.key_id() != &row.key_id {
+                        return Err(BrokerError::StorageUnavailable);
+                    }
+                    let scope =
+                        SecretScope::new(row.project_id, row.environment_id, row.id, row.revision)?;
+                    let metadata = row.sealed.open_metadata(key, scope)?;
+                    let value = row.sealed.open_value(key, scope)?;
+                    secrets.push(BackupSecret {
+                        name: Zeroizing::new(metadata.name().to_owned()),
+                        description: Zeroizing::new(metadata.description().to_owned()),
+                        tags: metadata
+                            .tags()
+                            .map(|tag| Zeroizing::new(tag.to_owned()))
+                            .collect(),
+                        value: crate::backup::encode_value(value.expose()),
+                    });
+                }
+                secret_count += secrets.len() as u32;
+                environments.push(BackupEnvironment {
+                    kind: environment.kind(),
+                    secrets,
+                });
+            }
+            payload.projects.push(BackupProject {
+                name: Zeroizing::new(project.name().to_owned()),
+                directory: Zeroizing::new(project.directory().to_owned()),
+                environments,
+            });
+        }
+        let receipt = BackupReceipt {
+            projects: payload.projects.len() as u32,
+            secrets: secret_count,
+        };
+        let file = crate::backup::seal(&payload, &password).map_err(backup_error)?;
+        drop(payload);
+        drop(password);
+        // A lock during key derivation abandons the export before anything is written.
+        check_project_state(
+            &mut *state.lock().map_err(|_| BrokerError::StorageUnavailable)?,
+            epoch,
+        )?;
+        let staged =
+            crate::backup::stage(path, &file).map_err(|_| BrokerError::BackupFileUnavailable)?;
+        // Audit before publishing: an unaudited export is dropped, and a prior backup survives.
+        db.audit(now_ms(), 20, 1)
+            .map_err(|_| BrokerError::AuditUnavailable)?;
+        staged
+            .publish()
+            .map_err(|_| BrokerError::BackupFileUnavailable)?;
+        Ok(receipt)
+    }
+
+    fn preview_restore(
+        db: &mut Database,
+        state: &Mutex<Shared>,
+        path: &std::path::Path,
+        password: Passphrase,
+        epoch: u64,
+    ) -> Result<RestorePreview, BrokerError> {
+        use std::mem::take;
+        use zeroize::Zeroizing;
+        {
+            let mut shared = state.lock().map_err(|_| BrokerError::StorageUnavailable)?;
+            check_project_state(&mut shared, epoch)?;
+            shared.restore_review = None;
+        }
+        let file = crate::backup::read_file(path).map_err(backup_error)?;
+        let payload = crate::backup::open(&file, &password).map_err(backup_error)?;
+        drop(password);
+        // Check audit room before the slow re-seal: one event per secret plus the restore.
+        let secret_total: usize = payload
+            .projects
+            .iter()
+            .flat_map(|project| &project.environments)
+            .map(|environment| environment.secrets.len())
+            .sum();
+        db.audit_room(secret_total + 1)?;
+        let existing = decrypt_projects(db, state, epoch)?;
+        if existing.len() + payload.projects.len() > 100 {
+            return Err(BrokerError::ProjectLimit);
+        }
+        let mut review = RestoreReview {
+            token: hex(&random_id()?),
+            created: std::time::Instant::now(),
+            projects: Vec::with_capacity(payload.projects.len()),
+            secrets: Vec::new(),
+            identities: Vec::with_capacity(payload.projects.len()),
+        };
+        let mut preview = Vec::with_capacity(payload.projects.len());
+        for mut source in payload.projects {
+            let kinds: Vec<_> = source.environments.iter().map(|item| item.kind).collect();
+            let project = Project::restored(
+                take(&mut *source.name),
+                take(&mut *source.directory),
+                &kinds,
+            )
+            .map_err(|_| BrokerError::InvalidBackup)?;
+            let clash = |name: &str, directory: &str| {
+                name.eq_ignore_ascii_case(project.name()) || directory == project.directory()
+            };
+            if existing
+                .iter()
+                .any(|other| clash(other.name(), other.directory()))
+                || review
+                    .identities
+                    .iter()
+                    .any(|(name, directory)| clash(name, directory))
+            {
+                return Err(BrokerError::ProjectExists);
+            }
+            let mut secret_count = 0;
+            for (environment, source) in project.environments().iter().zip(source.environments) {
+                let mut names: Vec<Zeroizing<String>> = Vec::with_capacity(source.secrets.len());
+                for mut secret in source.secrets {
+                    let metadata = SecretMetadata::new(
+                        take(&mut *secret.name),
+                        take(&mut *secret.description),
+                        secret.tags.iter_mut().map(|tag| take(&mut **tag)).collect(),
+                    )
+                    .map_err(|_| BrokerError::InvalidBackup)?;
+                    if names
+                        .iter()
+                        .any(|name| name.eq_ignore_ascii_case(metadata.name()))
+                    {
+                        return Err(BrokerError::InvalidBackup);
+                    }
+                    names.push(Zeroizing::new(metadata.name().to_owned()));
+                    let mut value =
+                        crate::backup::decode_value(&secret.value).map_err(backup_error)?;
+                    let value = SecretValue::new(take(&mut *value), true)
+                        .map_err(|_| BrokerError::InvalidBackup)?;
+                    let id = random_id()?;
+                    let scope = SecretScope::new(*project.id(), *environment.id(), id, 1)?;
+                    let mut shared = state.lock().map_err(|_| BrokerError::StorageUnavailable)?;
+                    check_project_state(&mut shared, epoch)?;
+                    let key = shared.session.key().ok_or(BrokerError::Cancelled)?;
+                    let sealed = SealedSecret::seal(key, scope, metadata, value, |key, nonce| {
+                        db.reserve_record(key, nonce)
+                            .map_err(|_| crate::secret::SecretError::ReservationFailed)
+                    })?;
+                    review.secrets.push(SecretRow {
+                        id,
+                        project_id: *project.id(),
+                        environment_id: *environment.id(),
+                        revision: 1,
+                        key_id: *key.key_id(),
+                        sealed,
+                    });
+                    secret_count += 1;
+                }
+            }
+            let key_id = {
+                let mut shared = state.lock().map_err(|_| BrokerError::StorageUnavailable)?;
+                check_project_state(&mut shared, epoch)?;
+                *shared.session.key().ok_or(BrokerError::Cancelled)?.key_id()
+            };
+            let mut nonce = [0; 24];
+            getrandom::fill(&mut nonce).map_err(|_| BrokerError::StorageUnavailable)?;
+            db.reserve_record(&key_id, &nonce)?;
+            let mut bytes = project.encode()?;
+            {
+                let mut shared = state.lock().map_err(|_| BrokerError::StorageUnavailable)?;
+                check_project_state(&mut shared, epoch)?;
+                shared
+                    .session
+                    .key()
+                    .ok_or(BrokerError::Cancelled)?
+                    .record(true, project.id(), 1, &nonce, &mut bytes)
+                    .map_err(|_| BrokerError::StorageUnavailable)?;
+            }
+            review.projects.push(ProjectRow {
+                id: *project.id(),
+                key_id,
+                nonce,
+                revision: 1,
+                ciphertext: bytes.to_vec(),
+            });
+            review.identities.push((
+                Zeroizing::new(project.name().to_owned()),
+                Zeroizing::new(project.directory().to_owned()),
+            ));
+            preview.push(RestoredProject {
+                name: project.name().to_owned(),
+                directory: project.directory().to_owned(),
+                environments: kinds,
+                secrets: secret_count,
+            });
+        }
+        let token = review.token.clone();
+        // The five minutes start once the review is ready, not before the slow re-seal.
+        review.created = std::time::Instant::now();
+        let mut shared = state.lock().map_err(|_| BrokerError::StorageUnavailable)?;
+        check_project_state(&mut shared, epoch)?;
+        shared.restore_review = Some(review);
+        Ok(RestorePreview {
+            token,
+            projects: preview,
+        })
+    }
+
+    fn commit_restore(
+        db: &mut Database,
+        state: &Mutex<Shared>,
+        token: &str,
+        confirmed: bool,
+        epoch: u64,
+    ) -> Result<BackupReceipt, BrokerError> {
+        let review = {
+            let mut shared = state.lock().map_err(|_| BrokerError::StorageUnavailable)?;
+            check_project_state(&mut shared, epoch)?;
+            if shared
+                .restore_review
+                .as_ref()
+                .is_none_or(|review| review.token != token)
+            {
+                return Err(BrokerError::InvalidReview);
+            }
+            shared
+                .restore_review
+                .take()
+                .ok_or(BrokerError::InvalidReview)?
+        };
+        if !confirmed {
+            return Ok(BackupReceipt {
+                projects: 0,
+                secrets: 0,
+            });
+        }
+        // Projects created since the preview may now clash with the backup.
+        let existing = decrypt_projects(db, state, epoch)?;
+        if existing.iter().any(|other| {
+            review.identities.iter().any(|(name, directory)| {
+                name.eq_ignore_ascii_case(other.name()) || directory.as_str() == other.directory()
+            })
+        }) {
+            return Err(BrokerError::ProjectExists);
+        }
+        let mut shared = state.lock().map_err(|_| BrokerError::StorageUnavailable)?;
+        check_project_state(&mut shared, epoch)?;
+        db.restore(&review.projects, &review.secrets)?;
+        Ok(BackupReceipt {
+            projects: review.projects.len() as u32,
+            secrets: review.secrets.len() as u32,
+        })
+    }
+
     fn operate(
         db: &mut Database,
         state: &Mutex<Shared>,
@@ -2567,6 +3126,7 @@ mod worker {
                 .ok_or(BrokerError::InvalidState)?;
             shared.selection = None;
             shared.import_review = None;
+            shared.restore_review = None;
             if !shared.session.complete_unlock(ticket, key) {
                 return Err(BrokerError::Cancelled);
             }
@@ -2601,6 +3161,276 @@ mod tests {
         let mut b = Zeroizing::new([0; 24]);
         getrandom::fill(&mut *b).expect("test RNG failed");
         Zeroizing::new(b.iter().map(|n| char::from(b'a' + n % 26)).collect())
+    }
+
+    fn unlocked_vault(dir: &std::path::Path) -> (Broker, String, Zeroizing<String>) {
+        let input = password();
+        let broker = Broker::start(dir.to_path_buf());
+        ready(&broker);
+        let epoch = broker.status().unwrap().lock_epoch;
+        broker.create(input.to_string(), epoch).unwrap();
+        let epoch = broker.status().unwrap().lock_epoch;
+        broker.unlock(input.to_string(), epoch).unwrap();
+        let epoch = broker.status().unwrap().lock_epoch;
+        (broker, epoch, input)
+    }
+
+    fn private_dir() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(
+            dir.path(),
+            <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o700),
+        )
+        .unwrap();
+        dir
+    }
+
+    fn run_request(project: &str) -> protocol::RunRequest {
+        protocol::RunRequest {
+            protocol_version: protocol::VERSION,
+            agent: protocol::AgentKind::Other,
+            project: project.into(),
+            environment: protocol::Environment::Development,
+            names: vec!["SERVICE_TOKEN".into()],
+            executable: "/usr/bin/env".into(),
+            args: vec![],
+            shell: false,
+            path: "/usr/bin:/bin".into(),
+        }
+    }
+
+    fn peer() -> crate::process::PeerIdentity {
+        crate::process::PeerIdentity {
+            uid: rustix::process::geteuid().as_raw(),
+            pid: std::process::id(),
+        }
+    }
+
+    // Sorts before the lifecycle test, which locks the shared isolated collection at its end.
+    #[test]
+    #[ignore = "Requires tests/linux_keyring.py and its isolated GNOME Keyring"]
+    fn isolated_linux_vault_backup_restore() {
+        assert_eq!(
+            std::env::var("LATCH_ISOLATED_KEYRING_TEST").ok().as_deref(),
+            Some("1"),
+            "isolation required"
+        );
+        if std::env::var("LATCH_TEST_BLANK_KEYRING").ok().as_deref() == Some("1") {
+            return;
+        }
+        let (source_dir, target_dir, files) = (private_dir(), private_dir(), private_dir());
+        let (source, epoch, _) = unlocked_vault(source_dir.path());
+        let project_dir = tempfile::tempdir().unwrap();
+        let choice = source
+            .select_directory(project_dir.path().to_path_buf(), epoch.clone())
+            .unwrap();
+        let project = source
+            .projects(
+                ProjectCommand::Create {
+                    name: "Orders".into(),
+                    token: choice.token,
+                },
+                epoch.clone(),
+            )
+            .unwrap()
+            .projects
+            .remove(0);
+        let value = password();
+        for (environment, name, secret) in [
+            (
+                protocol::Environment::Development,
+                "SERVICE_TOKEN",
+                value.to_string(),
+            ),
+            (protocol::Environment::Staging, "EMPTY_FLAG", String::new()),
+        ] {
+            source
+                .secrets(
+                    SecretCommand::Create {
+                        project_id: project.id.clone(),
+                        environment,
+                        name: name.into(),
+                        description: "Generated test credential".into(),
+                        tags: vec!["local".into()],
+                        value: secret,
+                        allow_empty: true,
+                    },
+                    epoch.clone(),
+                )
+                .unwrap();
+        }
+
+        let backup_password = password().to_string();
+        let path = files.path().join("vault.latchbackup");
+        assert_eq!(
+            source
+                .backup_export(path.clone(), "short".into(), epoch.clone())
+                .err(),
+            Some(BrokerError::InvalidPassphrase)
+        );
+        let receipt = source
+            .backup_export(path.clone(), backup_password.clone(), epoch.clone())
+            .unwrap();
+        assert_eq!((receipt.projects, receipt.secrets), (1, 2));
+        let bytes = std::fs::read(&path).unwrap();
+        assert!(!bytes.windows(value.len()).any(|w| w == value.as_bytes()));
+        assert!(!bytes.windows(13).any(|w| w == b"SERVICE_TOKEN"));
+        let mode = std::os::unix::fs::PermissionsExt::mode(
+            &std::fs::metadata(&path).unwrap().permissions(),
+        );
+        assert_eq!(mode & 0o777, 0o600);
+        let audit = source.audit_events(None, epoch.clone()).unwrap();
+        assert_eq!(audit.events[0].operation, 20);
+        drop(source);
+
+        let (target, epoch, input) = unlocked_vault(target_dir.path());
+        let truncated = files.path().join("truncated.latchbackup");
+        std::fs::write(&truncated, &bytes[..bytes.len() - 1]).unwrap();
+        assert_eq!(
+            target
+                .restore_preview(truncated, backup_password.clone(), epoch.clone())
+                .err(),
+            Some(BrokerError::InvalidBackup)
+        );
+        assert_eq!(
+            target
+                .restore_preview(path.clone(), password().to_string(), epoch.clone())
+                .err(),
+            Some(BrokerError::BackupAuthentication)
+        );
+
+        // A lock between preview and commit discards the review and writes nothing.
+        let preview = target
+            .restore_preview(path.clone(), backup_password.clone(), epoch.clone())
+            .unwrap();
+        target.lock().unwrap();
+        assert!(target.restore_commit(preview.token, true, epoch).is_err());
+        target
+            .unlock(input.to_string(), target.status().unwrap().lock_epoch)
+            .unwrap();
+        let epoch = target.status().unwrap().lock_epoch;
+        let listed = target
+            .projects(ProjectCommand::List { cursor: None }, epoch.clone())
+            .unwrap();
+        assert!(listed.projects.is_empty());
+
+        let preview = target
+            .restore_preview(path.clone(), backup_password.clone(), epoch.clone())
+            .unwrap();
+        assert_eq!(preview.projects.len(), 1);
+        assert_eq!(preview.projects[0].name, "Orders");
+        assert_eq!(preview.projects[0].directory, project.directory);
+        assert_eq!(preview.projects[0].secrets, 2);
+        assert_eq!(
+            target
+                .restore_commit(crate::project::hex(&[7; 16]), true, epoch.clone())
+                .err(),
+            Some(BrokerError::InvalidReview)
+        );
+        let receipt = target
+            .restore_commit(preview.token.clone(), true, epoch.clone())
+            .unwrap();
+        assert_eq!((receipt.projects, receipt.secrets), (1, 2));
+        assert!(
+            target
+                .restore_commit(preview.token, true, epoch.clone())
+                .is_err(),
+            "a review commits once"
+        );
+
+        let restored = target
+            .projects(ProjectCommand::List { cursor: None }, epoch.clone())
+            .unwrap()
+            .projects
+            .remove(0);
+        assert!(!restored.directory_confirmed);
+        assert_ne!(restored.id, project.id, "restore generates new identities");
+        assert_eq!(restored.environments.len(), 4);
+        // Unconfirmed projects match no agent request, by directory or by identity.
+        for locator in [project.directory.clone(), restored.id.clone()] {
+            assert_eq!(
+                target
+                    .prepare_run(
+                        run_request(&locator),
+                        crate::project::random_id().unwrap(),
+                        peer(),
+                        epoch.clone()
+                    )
+                    .err(),
+                Some(BrokerError::InvalidRun)
+            );
+        }
+        let SecretResult::List(secrets) = target
+            .secrets(
+                SecretCommand::List {
+                    project_id: restored.id.clone(),
+                    environment: protocol::Environment::Development,
+                },
+                epoch.clone(),
+            )
+            .unwrap()
+        else {
+            panic!("list returned a value")
+        };
+        assert_eq!(secrets[0].name, "SERVICE_TOKEN");
+        assert_eq!(secrets[0].tags, vec!["local".to_owned()]);
+        let SecretResult::Revealed(revealed) = target
+            .secrets(
+                SecretCommand::Reveal {
+                    project_id: restored.id.clone(),
+                    environment: protocol::Environment::Development,
+                    id: secrets[0].id.clone(),
+                    revision: secrets[0].revision.clone(),
+                },
+                epoch.clone(),
+            )
+            .unwrap()
+        else {
+            panic!("reveal returned metadata")
+        };
+        assert_eq!(revealed.value.as_str(), value.as_str());
+        assert_eq!(
+            target
+                .restore_preview(path.clone(), backup_password.clone(), epoch.clone())
+                .err(),
+            Some(BrokerError::ProjectExists)
+        );
+
+        let moved = tempfile::tempdir().unwrap();
+        let choice = target
+            .select_directory(moved.path().to_path_buf(), epoch.clone())
+            .unwrap();
+        let relinked = target
+            .projects(
+                ProjectCommand::Relink {
+                    id: restored.id.clone(),
+                    revision: restored.revision.clone(),
+                    token: choice.token,
+                },
+                epoch.clone(),
+            )
+            .unwrap()
+            .projects
+            .remove(0);
+        assert!(relinked.directory_confirmed);
+        assert_eq!(relinked.directory, choice.directory);
+        let run = target
+            .prepare_run(
+                run_request(&relinked.id),
+                crate::project::random_id().unwrap(),
+                peer(),
+                epoch.clone(),
+            )
+            .unwrap();
+        target.deny_run(run, epoch.clone()).unwrap();
+        let operations: Vec<u8> = target
+            .audit_events(None, epoch)
+            .unwrap()
+            .events
+            .iter()
+            .map(|event| event.operation)
+            .collect();
+        assert!(operations.contains(&21) && operations.contains(&5));
     }
 
     #[test]

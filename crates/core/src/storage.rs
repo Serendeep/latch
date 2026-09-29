@@ -264,10 +264,15 @@ impl Database {
     }
 
     pub(crate) fn audit_capacity(&self) -> Result<(), BrokerError> {
+        self.audit_room(1)
+    }
+
+    /// Fail unless `needed` more audit events fit under the fixed 32,768-event ceiling.
+    pub(crate) fn audit_room(&self, needed: usize) -> Result<(), BrokerError> {
         let count: i64 =
             self.connection
                 .query_row("SELECT count(*) FROM audit_events", [], |r| r.get(0))?;
-        if count >= 32768 {
+        if count.saturating_add(needed as i64) > 32768 {
             return Err(BrokerError::AuditUnavailable);
         }
         Ok(())

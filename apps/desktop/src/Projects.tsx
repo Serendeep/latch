@@ -5,6 +5,7 @@ import {
   listProjects,
   createProject,
   renameProject,
+  relinkProject,
   deleteProject,
   changeEnvironment,
 } from "./api";
@@ -187,6 +188,32 @@ export default function Projects({ epoch }: { epoch: string }) {
                 <p className="supporting-text project-path">
                   {project.directory}
                 </p>
+                {project.directory_confirmed ? null : (
+                  <p className="supporting-text" role="note">
+                    Restored from a backup. Agents can’t use this project until
+                    you choose its directory on this machine.
+                  </p>
+                )}
+                <button
+                  type="button"
+                  disabled={pending}
+                  onClick={() => {
+                    void run(async () => {
+                      const selection = await chooseProjectDirectory(epoch);
+                      if (selection)
+                        await relinkProject(
+                          epoch,
+                          project.id,
+                          project.revision,
+                          selection.token,
+                        );
+                    });
+                  }}
+                >
+                  {project.directory_confirmed
+                    ? "Change directory…"
+                    : "Confirm directory…"}
+                </button>
                 <form
                   key={`${project.id}:${project.revision}`}
                   onSubmit={(event) => {

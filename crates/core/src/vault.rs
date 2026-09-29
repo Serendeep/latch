@@ -48,6 +48,12 @@ impl Passphrase {
         validate_passphrase(&input)?;
         Ok(Self(input))
     }
+
+    /// Exact input bytes for a Rust key derivation; never trimmed or normalized.
+    #[cfg(unix)]
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
 }
 
 /// Device material destined only for the OS credential store, never the webview.

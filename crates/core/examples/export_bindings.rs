@@ -4,7 +4,10 @@ use latch_core::{
     audit::{AuditEvent, AuditPage},
     import::FileReview,
     process::{LaunchReceipt, LaunchRole, LaunchStep, RunReview},
-    project::{DirectorySelection, ProjectPage, ProjectSummary},
+    project::{
+        BackupReceipt, DirectorySelection, ProjectPage, ProjectSummary, RestorePreview,
+        RestoredProject,
+    },
     protocol::{AgentKind, Environment},
     secret::SecretSummary,
 };
@@ -26,6 +29,9 @@ fn main() {
             ProjectSummary::decl(&config),
             ProjectPage::decl(&config),
             DirectorySelection::decl(&config),
+            BackupReceipt::decl(&config),
+            RestoredProject::decl(&config),
+            RestorePreview::decl(&config),
             SecretSummary::decl(&config),
             FileReview::decl(&config),
             LaunchRole::decl(&config),

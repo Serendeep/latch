@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-restore-commit"
+description = "Enables the restore_commit command without any pre-configured scope."
+commands.allow = ["restore_commit"]
+
+[[permission]]
+identifier = "deny-restore-commit"
+description = "Denies the restore_commit command without any pre-configured scope."
+commands.deny = ["restore_commit"]

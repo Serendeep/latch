@@ -10,6 +10,7 @@ test("project creation, explicit scope deletion, accessible confirmation, and lo
       id: string;
       name: string;
       directory: string;
+      directory_confirmed: boolean;
       revision: string;
       environments: string[];
     };
@@ -74,6 +75,7 @@ test("project creation, explicit scope deletion, accessible confirmation, and lo
               id: "2".repeat(32),
               name: String(args.name),
               directory: "/tmp/latch-example-project",
+              directory_confirmed: true,
               revision: "1",
               environments: ["development", "test", "staging", "production"],
             });
@@ -102,6 +104,20 @@ test("project creation, explicit scope deletion, accessible confirmation, and lo
               empty: args.example ? [] : ["OPTIONAL_TOKEN"],
             };
           if (command === "import_commit") return [];
+          if (command === "backup_export") return { projects: 1, secrets: 2 };
+          if (command === "restore_preview")
+            return {
+              token: "7".repeat(32),
+              projects: [
+                {
+                  name: "Restored orders",
+                  directory: "/home/previous-machine/orders",
+                  environments: ["development", "production"],
+                  secrets: 4,
+                },
+              ],
+            };
+          if (command === "restore_commit") return { projects: 0, secrets: 0 };
           const project = projects.find((item) => item.id === args.id);
           if (project) {
             if (command === "project_rename") project.name = String(args.name);
@@ -247,6 +263,57 @@ test("project creation, explicit scope deletion, accessible confirmation, and lo
   await expect(
     page.getByText("No projects on this page.", { exact: false }),
   ).toBeVisible();
+  await page.getByRole("button", { name: "Backup", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Export an encrypted backup" }),
+  ).toBeVisible();
+  const [exportField, restoreField] = await page
+    .getByLabel("Backup password", { exact: true })
+    .all();
+  await restoreField!.fill("generated-restore-password");
+  await page.getByRole("button", { name: "Choose backup…" }).click();
+  const restore = page.getByRole("dialog", { name: "Review restore" });
+  await expect(restore).toBeVisible();
+  await expect(restore.getByRole("button", { name: "Cancel" })).toBeFocused();
+  await expect(restoreField!).toHaveValue("");
+  for (const theme of ["light", "dark"]) {
+    await page.evaluate(
+      (theme) =>
+        ((document.querySelector(".app") as HTMLElement).dataset.theme = theme),
+      theme,
+    );
+    expect(
+      (
+        await new AxeBuilder({ page })
+          .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
+          .analyze()
+      ).violations,
+    ).toEqual([]);
+    await page.screenshot({
+      path: `output/playwright/latch-restore-${theme}.png`,
+      fullPage: false,
+    });
+  }
+  await page.keyboard.press("Escape");
+  await expect(restore).not.toBeVisible();
+  await exportField!.fill("generated-backup-password");
+  await page
+    .getByLabel("Confirm backup password")
+    .fill("generated-backup-password");
+  await page.getByRole("button", { name: "Save backup…" }).click();
+  await expect(page.getByText("Saved 1 project and 2 secrets.")).toBeVisible();
+  await page.screenshot({
+    path: "output/playwright/latch-backup.png",
+    fullPage: true,
+  });
+  expect(
+    await page.evaluate(() =>
+      [...document.querySelectorAll("body *")]
+        .filter((element) => element.getBoundingClientRect().right > innerWidth)
+        .map((element) => `${element.tagName}.${element.className}`),
+    ),
+  ).toEqual([]);
+  await page.getByRole("button", { name: "Projects", exact: true }).click();
   await page.getByLabel("New project name").fill("Discard on lock");
   await page.getByRole("button", { name: "Lock vault", exact: true }).click();
   await expect(

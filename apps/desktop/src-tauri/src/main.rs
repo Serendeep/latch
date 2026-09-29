@@ -6,7 +6,7 @@ use latch_core::{
     broker::{Broker, BrokerError, ProjectCommand, SecretCommand, SecretResult},
     import::FileReview,
     process::{LaunchReceipt, MissingSecretInput, PreparedRun, RunReview},
-    project::{DirectorySelection, ProjectPage},
+    project::{BackupReceipt, DirectorySelection, ProjectPage, RestorePreview},
     protocol::{Environment, RunErrorCode, RunResponse},
     secret::{RevealedSecret, SecretSummary},
 };
@@ -688,6 +688,149 @@ async fn project_rename(
 }
 
 #[tauri::command]
+async fn project_relink(
+    window: tauri::WebviewWindow,
+    broker: tauri::State<'_, Arc<Broker>>,
+    id: String,
+    revision: String,
+    token: String,
+    lock_epoch: String,
+) -> Result<ProjectPage, BrokerError> {
+    authorize(&window)?;
+    project_operation(
+        Arc::clone(&broker),
+        ProjectCommand::Relink {
+            id,
+            revision,
+            token,
+        },
+        lock_epoch,
+    )
+    .await
+}
+
+/// Run a native file dialog for the unlocked session; the path never comes from the webview.
+fn choose_backup_file(
+    window: &tauri::WebviewWindow,
+    broker: &Broker,
+    lock_epoch: &str,
+    save: bool,
+) -> Result<Option<std::path::PathBuf>, BrokerError> {
+    let status = broker.status()?;
+    if status.lock_epoch != lock_epoch
+        || !matches!(status.vault, latch_core::VaultAvailability::Unlocked)
+    {
+        return Err(BrokerError::Cancelled);
+    }
+    let dialog = window
+        .dialog()
+        .file()
+        .set_parent(window)
+        .add_filter("Latch backup", &["latchbackup"]);
+    let path = if save {
+        dialog
+            .set_title("Save encrypted backup")
+            .set_file_name("latch.latchbackup")
+            .blocking_save_file()
+    } else {
+        dialog
+            .set_title("Choose a Latch backup to restore")
+            .blocking_pick_file()
+    };
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    let path = path
+        .into_path()
+        .map_err(|_| BrokerError::BackupFileUnavailable)?;
+    if !save
+        || path
+            .extension()
+            .is_some_and(|extension| extension == "latchbackup")
+    {
+        return Ok(Some(path));
+    }
+    // GTK does not add the filter's extension. Add it so restore's filter shows the file, but
+    // never replace a file the user was not asked about.
+    let mut name = path.file_name().unwrap_or_default().to_owned();
+    name.push(".latchbackup");
+    let path = path.with_file_name(name);
+    if path.symlink_metadata().is_ok() {
+        return Err(BrokerError::BackupFileUnavailable);
+    }
+    Ok(Some(path))
+}
+
+#[tauri::command]
+async fn backup_export(
+    window: tauri::WebviewWindow,
+    broker: tauri::State<'_, Arc<Broker>>,
+    picker: tauri::State<'_, Arc<Mutex<()>>>,
+    password: String,
+    lock_epoch: String,
+) -> Result<Option<BackupReceipt>, BrokerError> {
+    authorize(&window)?;
+    // Wiped on drop if the dialog is cancelled; moved, not copied, into the broker.
+    let mut password = Zeroizing::new(password);
+    let broker = Arc::clone(&broker);
+    let picker = Arc::clone(&picker);
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = picker.try_lock().map_err(|_| BrokerError::Busy)?;
+        let Some(path) = choose_backup_file(&window, &broker, &lock_epoch, true)? else {
+            return Ok(None);
+        };
+        broker
+            .backup_export(path, std::mem::take(&mut *password), lock_epoch)
+            .map(Some)
+    })
+    .await
+    .map_err(|_| BrokerError::StorageUnavailable)?
+}
+
+#[tauri::command]
+async fn restore_preview(
+    window: tauri::WebviewWindow,
+    broker: tauri::State<'_, Arc<Broker>>,
+    picker: tauri::State<'_, Arc<Mutex<()>>>,
+    password: String,
+    lock_epoch: String,
+) -> Result<Option<RestorePreview>, BrokerError> {
+    authorize(&window)?;
+    // Wiped on drop if the dialog is cancelled; moved, not copied, into the broker.
+    let mut password = Zeroizing::new(password);
+    let broker = Arc::clone(&broker);
+    let picker = Arc::clone(&picker);
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = picker.try_lock().map_err(|_| BrokerError::Busy)?;
+        let Some(path) = choose_backup_file(&window, &broker, &lock_epoch, false)? else {
+            return Ok(None);
+        };
+        broker
+            .restore_preview(path, std::mem::take(&mut *password), lock_epoch)
+            .map(Some)
+    })
+    .await
+    .map_err(|_| BrokerError::StorageUnavailable)?
+}
+
+#[tauri::command]
+async fn restore_commit(
+    window: tauri::WebviewWindow,
+    broker: tauri::State<'_, Arc<Broker>>,
+    token: String,
+    confirmed: bool,
+    lock_epoch: String,
+) -> Result<BackupReceipt, BrokerError> {
+    authorize(&window)?;
+    let broker = Arc::clone(&broker);
+    tauri::async_runtime::spawn_blocking(move || {
+        broker.restore_commit(token, confirmed, lock_epoch)
+    })
+    .await
+    .map_err(|_| BrokerError::StorageUnavailable)?
+}
+
+#[tauri::command]
 async fn project_delete(
     window: tauri::WebviewWindow,
     broker: tauri::State<'_, Arc<Broker>>,
@@ -1241,6 +1384,7 @@ fn main() {
             audit_events_list,
             project_create,
             project_rename,
+            project_relink,
             project_delete,
             environment_create,
             environment_delete,
@@ -1251,7 +1395,10 @@ fn main() {
             secret_update,
             secret_delete,
             secret_reveal,
-            secret_copy
+            secret_copy,
+            backup_export,
+            restore_preview,
+            restore_commit
         ])
         .run(tauri::generate_context!())
         .is_err()

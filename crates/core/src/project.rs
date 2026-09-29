@@ -34,6 +34,8 @@ pub struct Project {
     directory: Zeroizing<String>,
     revision: i64,
     environments: Vec<ProjectEnvironment>,
+    /// Restored from a backup; agent requests never match it until the user picks the directory.
+    unconfirmed: bool,
 }
 
 /// An environment's identity and immutable kind within its owning project.
@@ -84,7 +86,65 @@ impl Project {
             directory,
             revision: 1,
             environments,
+            unconfirmed: false,
         })
+    }
+
+    /// Rebuild a project from a backup with fresh identities and an unconfirmed directory.
+    ///
+    /// The path is checked for shape only: it may not exist on this machine, and it
+    /// grants nothing until [`Project::relink`] binds a directory the user selected here.
+    #[cfg(unix)]
+    pub(crate) fn restored(
+        name: String,
+        directory: String,
+        kinds: &[Environment],
+    ) -> Result<Self, ProjectError> {
+        let name = validated_name(name)?;
+        let directory = Zeroizing::new(directory);
+        if !valid_stored_directory(&directory) {
+            return Err(ProjectError::InvalidDirectory);
+        }
+        let mut environments = Vec::with_capacity(kinds.len());
+        for kind in kinds {
+            if environments
+                .iter()
+                .any(|item: &ProjectEnvironment| item.kind == *kind)
+            {
+                return Err(ProjectError::EnvironmentExists);
+            }
+            environments.push(ProjectEnvironment {
+                id: random_id()?,
+                kind: *kind,
+            });
+        }
+        Ok(Self {
+            id: random_id()?,
+            name,
+            directory,
+            revision: 1,
+            environments,
+            unconfirmed: true,
+        })
+    }
+
+    /// Bind a directory from a trusted Rust selection and mark it confirmed.
+    #[cfg(unix)]
+    pub(crate) fn relink(
+        &mut self,
+        directory: Zeroizing<String>,
+        expected_revision: &str,
+    ) -> Result<(), ProjectError> {
+        let next = self.next_revision(expected_revision)?;
+        self.directory = directory;
+        self.unconfirmed = false;
+        self.revision = next;
+        Ok(())
+    }
+
+    /// False for a restored project until its directory is chosen again on this machine.
+    pub fn directory_confirmed(&self) -> bool {
+        !self.unconfirmed
     }
 
     /// Opaque project identity. No user-derived identifier is generated.
@@ -218,8 +278,10 @@ pub struct ProjectSummary {
     pub id: String,
     /// Display name.
     pub name: String,
-    /// Confirmed canonical directory.
+    /// Canonical directory, or the backup's path while unconfirmed.
     pub directory: String,
+    /// False until a restored project's directory is chosen on this machine.
+    pub directory_confirmed: bool,
     /// Decimal revision for optimistic concurrency.
     pub revision: String,
     /// Existing scopes; missing kinds have no fallback.
@@ -234,6 +296,40 @@ pub struct ProjectPage {
     pub projects: Vec<ProjectSummary>,
     /// Last returned ID when another page exists.
     pub next_cursor: Option<String>,
+}
+
+/// Counts for a completed export or restore. No names or values.
+#[derive(Serialize)]
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS))]
+pub struct BackupReceipt {
+    /// Projects written or added.
+    pub projects: u32,
+    /// Secrets written or added.
+    pub secrets: u32,
+}
+
+/// One project a reviewed restore would add. Values stay in Rust.
+#[derive(Serialize)]
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS))]
+pub struct RestoredProject {
+    /// Display name.
+    pub name: String,
+    /// Directory recorded in the backup; unconfirmed on this machine.
+    pub directory: String,
+    /// Environments the project will have.
+    pub environments: Vec<Environment>,
+    /// Number of secrets across all environments.
+    pub secrets: u32,
+}
+
+/// Names-only preview of an authenticated backup, bound to one single-use token.
+#[derive(Serialize)]
+#[cfg_attr(feature = "bindings", derive(ts_rs::TS))]
+pub struct RestorePreview {
+    /// Single-use commit token, valid for five minutes in this unlocked session.
+    pub token: String,
+    /// Projects the commit would add.
+    pub projects: Vec<RestoredProject>,
 }
 
 /// Native directory selection, not a filesystem permission.
@@ -274,6 +370,7 @@ impl Project {
             id: hex(&self.id),
             name: self.name.to_string(),
             directory: self.directory.to_string(),
+            directory_confirmed: !self.unconfirmed,
             revision: self.revision(),
             environments: self.environments.iter().map(|item| item.kind).collect(),
         }
@@ -286,6 +383,8 @@ impl Project {
             name: &'a str,
             directory: &'a str,
             environments: &'a [ProjectEnvironment],
+            #[serde(skip_serializing_if = "std::ops::Not::not")]
+            unconfirmed: bool,
         }
         // Worst-case JSON escaping for a bounded 8 KiB path fits without reallocating
         // an allocation that previously held plaintext, including the AEAD tag.
@@ -297,6 +396,7 @@ impl Project {
                 name: &self.name,
                 directory: &self.directory,
                 environments: &self.environments,
+                unconfirmed: self.unconfirmed,
             },
         )
         .map_err(|_| ProjectError::InvalidName)?;
@@ -313,6 +413,9 @@ impl Project {
             #[serde(borrow)]
             directory: std::borrow::Cow<'a, str>,
             environments: Vec<ProjectEnvironment>,
+            // Absent in records written before backups existed.
+            #[serde(default)]
+            unconfirmed: bool,
         }
         if bytes.len() > 65536 || revision < 1 {
             return Err(ProjectError::InvalidName);
@@ -321,14 +424,8 @@ impl Project {
             serde_json::from_slice(bytes).map_err(|_| ProjectError::InvalidName)?;
         let name = validated_name(record.name.into_owned())?;
         let directory = Zeroizing::new(record.directory.into_owned());
-        let path = Path::new(directory.as_str());
         if record.version != 1
-            || directory.len() > 8192
-            || !path.is_absolute()
-            || directory.chars().any(char::is_control)
-            || path
-                .components()
-                .any(|part| matches!(part, Component::ParentDir))
+            || !valid_stored_directory(&directory)
             || record.environments.len() > 4
         {
             return Err(ProjectError::InvalidDirectory);
@@ -348,8 +445,20 @@ impl Project {
             directory,
             revision,
             environments: record.environments,
+            unconfirmed: record.unconfirmed,
         })
     }
+}
+
+#[cfg(unix)]
+fn valid_stored_directory(directory: &str) -> bool {
+    let path = Path::new(directory);
+    directory.len() <= 8192
+        && path.is_absolute()
+        && !directory.chars().any(char::is_control)
+        && !path
+            .components()
+            .any(|part| matches!(part, Component::ParentDir))
 }
 
 #[cfg(unix)]
