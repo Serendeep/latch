@@ -2778,6 +2778,8 @@ mod worker {
         epoch: u64,
     ) -> Result<BackupReceipt, BrokerError> {
         use zeroize::Zeroizing;
+        // Fail before any decryption or key derivation if the export could not be audited.
+        db.audit_capacity()?;
         let projects = decrypt_projects(db, state, epoch)?;
         let mut payload = Payload {
             version: 1,
@@ -2810,7 +2812,7 @@ mod worker {
                             .tags()
                             .map(|tag| Zeroizing::new(tag.to_owned()))
                             .collect(),
-                        value: Zeroizing::new(value.expose().to_owned()),
+                        value: crate::backup::encode_value(value.expose()),
                     });
                 }
                 secret_count += secrets.len() as u32;
@@ -2837,12 +2839,14 @@ mod worker {
             &mut *state.lock().map_err(|_| BrokerError::StorageUnavailable)?,
             epoch,
         )?;
-        crate::backup::write_file(path, &file).map_err(|_| BrokerError::BackupFileUnavailable)?;
-        if db.audit(now_ms(), 20, 1).is_err() {
-            // Never leave behind an export the audit history does not show.
-            let _ = std::fs::remove_file(path);
-            return Err(BrokerError::AuditUnavailable);
-        }
+        let staged =
+            crate::backup::stage(path, &file).map_err(|_| BrokerError::BackupFileUnavailable)?;
+        // Audit before publishing: an unaudited export is dropped, and a prior backup survives.
+        db.audit(now_ms(), 20, 1)
+            .map_err(|_| BrokerError::AuditUnavailable)?;
+        staged
+            .publish()
+            .map_err(|_| BrokerError::BackupFileUnavailable)?;
         Ok(receipt)
     }
 
@@ -2863,9 +2867,14 @@ mod worker {
         let file = crate::backup::read_file(path).map_err(backup_error)?;
         let payload = crate::backup::open(&file, &password).map_err(backup_error)?;
         drop(password);
-        if payload.projects.is_empty() {
-            return Err(BrokerError::InvalidBackup);
-        }
+        // Check audit room before the slow re-seal: one event per secret plus the restore.
+        let secret_total: usize = payload
+            .projects
+            .iter()
+            .flat_map(|project| &project.environments)
+            .map(|environment| environment.secrets.len())
+            .sum();
+        db.audit_room(secret_total + 1)?;
         let existing = decrypt_projects(db, state, epoch)?;
         if existing.len() + payload.projects.len() > 100 {
             return Err(BrokerError::ProjectLimit);
@@ -2916,7 +2925,9 @@ mod worker {
                         return Err(BrokerError::InvalidBackup);
                     }
                     names.push(Zeroizing::new(metadata.name().to_owned()));
-                    let value = SecretValue::new(take(&mut *secret.value), true)
+                    let mut value =
+                        crate::backup::decode_value(&secret.value).map_err(backup_error)?;
+                    let value = SecretValue::new(take(&mut *value), true)
                         .map_err(|_| BrokerError::InvalidBackup)?;
                     let id = random_id()?;
                     let scope = SecretScope::new(*project.id(), *environment.id(), id, 1)?;
@@ -2976,6 +2987,8 @@ mod worker {
             });
         }
         let token = review.token.clone();
+        // The five minutes start once the review is ready, not before the slow re-seal.
+        review.created = std::time::Instant::now();
         let mut shared = state.lock().map_err(|_| BrokerError::StorageUnavailable)?;
         check_project_state(&mut shared, epoch)?;
         shared.restore_review = Some(review);

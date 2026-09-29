@@ -737,11 +737,28 @@ fn choose_backup_file(
             .set_title("Choose a Latch backup to restore")
             .blocking_pick_file()
     };
-    path.map(|path| {
-        path.into_path()
-            .map_err(|_| BrokerError::BackupFileUnavailable)
-    })
-    .transpose()
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    let path = path
+        .into_path()
+        .map_err(|_| BrokerError::BackupFileUnavailable)?;
+    if !save
+        || path
+            .extension()
+            .is_some_and(|extension| extension == "latchbackup")
+    {
+        return Ok(Some(path));
+    }
+    // GTK does not add the filter's extension. Add it so restore's filter shows the file, but
+    // never replace a file the user was not asked about.
+    let mut name = path.file_name().unwrap_or_default().to_owned();
+    name.push(".latchbackup");
+    let path = path.with_file_name(name);
+    if path.symlink_metadata().is_ok() {
+        return Err(BrokerError::BackupFileUnavailable);
+    }
+    Ok(Some(path))
 }
 
 #[tauri::command]

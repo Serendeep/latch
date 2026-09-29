@@ -71,7 +71,39 @@ pub(crate) struct BackupSecret {
     pub name: Zeroizing<String>,
     pub description: Zeroizing<String>,
     pub tags: Vec<Zeroizing<String>>,
+    /// Lowercase hex of the UTF-8 value. JSON copies escaped strings through an unwiped
+    /// scratch buffer while parsing; hex never needs escaping.
     pub value: Zeroizing<String>,
+}
+
+/// Hex-encode a value into a pre-sized buffer, so no unwiped copy is left by growth.
+pub(crate) fn encode_value(value: &str) -> Zeroizing<String> {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut hex = Zeroizing::new(String::with_capacity(value.len() * 2));
+    for byte in value.bytes() {
+        hex.push(char::from(DIGITS[usize::from(byte >> 4)]));
+        hex.push(char::from(DIGITS[usize::from(byte & 15)]));
+    }
+    hex
+}
+
+/// Decode [`encode_value`] output; anything else is an invalid backup.
+pub(crate) fn decode_value(hex: &str) -> Result<Zeroizing<String>, BackupError> {
+    if !hex.len().is_multiple_of(2) {
+        return Err(BackupError::Invalid);
+    }
+    let digit = |byte: u8| match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        _ => Err(BackupError::Invalid),
+    };
+    let mut bytes = Zeroizing::new(Vec::with_capacity(hex.len() / 2));
+    for [high, low] in hex.as_bytes().as_chunks::<2>().0 {
+        bytes.push(digit(*high)? << 4 | digit(*low)?);
+    }
+    std::str::from_utf8(&bytes).map_err(|_| BackupError::Invalid)?;
+    let text = String::from_utf8(std::mem::take(&mut *bytes)).map_err(|_| BackupError::Invalid)?;
+    Ok(Zeroizing::new(text))
 }
 
 impl Payload {
@@ -201,14 +233,42 @@ impl std::io::Write for Counter {
     }
 }
 
-/// Write through a private temporary sibling so a failed export never clobbers a prior backup.
+/// A fully written and synced private temporary sibling of the destination. Dropping it
+/// without [`Staged::publish`] removes it, so a failed export never touches a prior backup.
 #[cfg(unix)]
-pub(crate) fn write_file(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::{
-        fs::{File, OpenOptions},
-        io::Write,
-        os::unix::fs::OpenOptionsExt,
-    };
+pub(crate) struct Staged {
+    temporary: std::path::PathBuf,
+    path: std::path::PathBuf,
+    published: bool,
+}
+
+#[cfg(unix)]
+impl Staged {
+    /// Atomically replace the destination. The directory sync afterwards is best effort:
+    /// the rename has already happened, so reporting failure would be wrong.
+    pub(crate) fn publish(mut self) -> std::io::Result<()> {
+        std::fs::rename(&self.temporary, &self.path)?;
+        self.published = true;
+        if let Some(parent) = self.path.parent() {
+            let _ = std::fs::File::open(parent).and_then(|dir| dir.sync_all());
+        }
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+impl Drop for Staged {
+    fn drop(&mut self) {
+        if !self.published {
+            let _ = std::fs::remove_file(&self.temporary);
+        }
+    }
+}
+
+/// Write and sync `bytes` next to `path` (mode 0600, never following or reusing a file).
+#[cfg(unix)]
+pub(crate) fn stage(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<Staged> {
+    use std::{fs::OpenOptions, io::Write, os::unix::fs::OpenOptionsExt};
     let invalid = || std::io::Error::from(std::io::ErrorKind::InvalidInput);
     let name = path.file_name().ok_or_else(invalid)?;
     let parent = path
@@ -226,32 +286,30 @@ pub(crate) fn write_file(path: &std::path::Path, bytes: &[u8]) -> std::io::Resul
             .map(|b| format!("{b:02x}"))
             .collect::<String>()
     ));
-    let temporary = parent.join(temporary);
-    let written = (|| {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
-            .open(&temporary)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        std::fs::rename(&temporary, path)?;
-        File::open(parent)?.sync_all()
-    })();
-    if written.is_err() {
-        let _ = std::fs::remove_file(&temporary);
-    }
-    written
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+        .open(parent.join(&temporary))?;
+    let staged = Staged {
+        temporary: parent.join(temporary),
+        path: path.to_path_buf(),
+        published: false,
+    };
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    Ok(staged)
 }
 
-/// Read one regular file, refusing symlinks and anything larger than a valid backup.
+/// Read one regular file, refusing symlinks, FIFOs, and anything larger than a valid backup.
 #[cfg(unix)]
 pub(crate) fn read_file(path: &std::path::Path) -> Result<Vec<u8>, BackupError> {
     use std::{fs::OpenOptions, io::Read, os::unix::fs::OpenOptionsExt};
     let file = OpenOptions::new()
         .read(true)
-        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+        // Non-blocking so a FIFO cannot stall the worker before the regular-file check.
+        .custom_flags((rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK).bits() as i32)
         .open(path)
         .map_err(|_| BackupError::Invalid)?;
     let metadata = file.metadata().map_err(|_| BackupError::Invalid)?;
@@ -288,7 +346,7 @@ mod tests {
                         name: Zeroizing::new("API_TOKEN".into()),
                         description: Zeroizing::new(String::new()),
                         tags: vec![],
-                        value: Zeroizing::new("generated-test-value-7f3a".into()),
+                        value: encode_value("generated-test-value-7f3a"),
                     }],
                 }],
             }],
@@ -302,7 +360,10 @@ mod tests {
         assert!(!file.windows(25).any(|w| w == b"generated-test-value-7f3a"));
         let restored = open(&file, &password("right")).unwrap();
         let secret = &restored.projects[0].environments[0].secrets[0];
-        assert_eq!(secret.value.as_str(), "generated-test-value-7f3a");
+        assert_eq!(
+            decode_value(&secret.value).unwrap().as_str(),
+            "generated-test-value-7f3a"
+        );
         assert_eq!(restored.projects[0].directory.as_str(), "/home/dev/orders");
     }
 
@@ -378,6 +439,20 @@ mod tests {
         assert!(seal(&version, &password("right")).is_err());
     }
 
+    #[test]
+    fn values_roundtrip_as_escape_free_hex() {
+        let value = "line one\n\"quoted\" \\ ünïcode 🔑";
+        let hex = encode_value(value);
+        assert!(
+            hex.bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+        );
+        assert_eq!(decode_value(&hex).unwrap().as_str(), value);
+        for bad in ["abc", "zz", "C3A9", "ff"] {
+            assert_eq!(decode_value(bad).err(), Some(BackupError::Invalid), "{bad}");
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn file_write_is_private_and_reads_refuse_symlinks() {
@@ -385,15 +460,28 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("vault.latchbackup");
         std::fs::write(&path, b"previous backup").unwrap();
-        write_file(&path, b"new backup").unwrap();
+        drop(stage(&path, b"abandoned").unwrap());
+        assert_eq!(std::fs::read(&path).unwrap(), b"previous backup");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+        stage(&path, b"new backup").unwrap().publish().unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"new backup");
         let mode = std::fs::metadata(&path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
-        assert!(write_file(std::path::Path::new("relative.latchbackup"), b"x").is_err());
+        assert!(stage(std::path::Path::new("relative.latchbackup"), b"x").is_err());
         let link = dir.path().join("link.latchbackup");
         std::os::unix::fs::symlink(&path, &link).unwrap();
         assert_eq!(read_file(&link).err(), Some(BackupError::Invalid));
         assert_eq!(read_file(&path).unwrap(), b"new backup");
+        let fifo = dir.path().join("fifo.latchbackup");
+        rustix::fs::mknodat(
+            rustix::fs::CWD,
+            &fifo,
+            rustix::fs::FileType::Fifo,
+            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+            0,
+        )
+        .unwrap();
+        assert_eq!(read_file(&fifo).err(), Some(BackupError::Invalid));
     }
 }
