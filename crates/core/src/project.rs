@@ -450,6 +450,7 @@ impl Project {
     }
 }
 
+#[cfg(unix)]
 fn valid_stored_directory(directory: &str) -> bool {
     let path = Path::new(directory);
     directory.len() <= 8192

@@ -474,14 +474,13 @@ mod tests {
         assert_eq!(read_file(&link).err(), Some(BackupError::Invalid));
         assert_eq!(read_file(&path).unwrap(), b"new backup");
         let fifo = dir.path().join("fifo.latchbackup");
-        rustix::fs::mknodat(
-            rustix::fs::CWD,
-            &fifo,
-            rustix::fs::FileType::Fifo,
-            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
-            0,
-        )
-        .unwrap();
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(&fifo)
+                .status()
+                .unwrap()
+                .success()
+        );
         assert_eq!(read_file(&fifo).err(), Some(BackupError::Invalid));
     }
 }

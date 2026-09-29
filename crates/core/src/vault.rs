@@ -50,6 +50,7 @@ impl Passphrase {
     }
 
     /// Exact input bytes for a Rust key derivation; never trimmed or normalized.
+    #[cfg(unix)]
     pub(crate) fn as_bytes(&self) -> &[u8] {
         self.0.as_bytes()
     }
