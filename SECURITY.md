@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-There is no supported production release yet. The development build supports vault creation, passphrase unlocking, project metadata, secret management, individual reveal, clipboard copy, configuration import, example-name comparison, and one-time approved command launch on Linux. Native folder-picker, clipboard, and launch behavior remain unqualified. Recovery is not implemented. Do not entrust it with credentials.
+Only the latest release is supported, and only on Linux with a password-protected GNOME login keyring. Latch is early software: keep an encrypted backup, and weigh the absence of an external review before storing production credentials.
 
 Latch has not had an external security review. No release claims that its cryptography, local IPC, approval handling, or launch behavior has been independently verified.
 

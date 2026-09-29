@@ -4,7 +4,7 @@ title: "Managing your vault"
 
 ## Projects and environments
 
-Add a project in the manager and select its directory. The directory binds CLI requests to that project. Each project starts with development, test, staging, and production environments. Select the environment before creating, importing, revealing, or copying secrets.
+Add a project in the manager and select its directory. The directory binds CLI requests to that project. If you move the project, use **Change directory…** to bind the new location. Each project starts with development, test, staging, and production environments. Select the environment before creating, importing, revealing, or copying secrets.
 
 ## Import and expected names
 
@@ -22,6 +22,16 @@ The vault locks after five minutes. Closing the manager locks it and keeps the b
 
 Locking cannot retract a value already delivered to a process. OS-session locking and suspend integration are not implemented yet.
 
-## Recovery
+## Backups
 
-Unlocking requires both your separate Latch passphrase and device material in the OS credential store. There is no passphrase reset or portable backup recovery yet. Losing either factor prevents normal unlock.
+Unlocking requires both your Latch passphrase and device material in the GNOME Keyring. There is no passphrase reset, and losing either one means the vault can't be opened. Once you delete your `.env` files, keep a backup.
+
+**Export.** In the **Backup** tab, enter a backup password twice and choose where to save. The file (`.latchbackup`) holds every project, environment, and secret, encrypted with a key derived from that password (Argon2id, then XChaCha20-Poly1305). Anyone with the file and the password can read every secret. Use a long generated password, and store it somewhere other than the file, such as a password manager. Audit history is not included; each export is recorded in it.
+
+**Restore.** Restore adds a backup's projects to the unlocked vault. On a new machine, create a vault first, then restore into it:
+
+1. In the **Backup** tab, enter the backup password and choose the file.
+2. Review the projects it contains, then confirm. Nothing is written until you confirm, and a failed or cancelled restore changes nothing.
+3. Open each restored project and choose **Confirm directory…**. Until you do, agent requests never match it, even if a directory exists at the old path.
+
+A restore that would duplicate an existing project's name or directory is refused. Rename or delete the existing project first. Restored records get new identities and are encrypted under this vault's key.
