@@ -12,62 +12,55 @@ When an agent needs a key, it asks Latch to launch a command with that named sec
 
 Latch is open source and local only. It uses Tauri 2, React, TypeScript, Rust, and SQLite.
 
-## Install the agent skill
+## Watch it work
+
+[![Latch demo: Claude Code and Codex request a GitHub token through Latch](docs/assets/latch-demo.jpg)](docs/assets/latch-demo.mp4)
+
+[Watch the demo (1:52)](docs/assets/latch-demo.mp4). It shows, in one take:
+
+1. Creating a vault and adding a project.
+2. Claude Code asking to start a dashboard that needs `GITHUB_TOKEN`. The key is typed into the Latch popup and approved for one launch.
+3. Codex running a new script with the same stored key.
+4. The audit history of both requests.
+
+Both are the real agent apps, running in a disposable Linux session with its own keyring and vault. The dashboard talks to a local mock of the GitHub API, and the token is generated for the recording. Slow stretches are sped up and labeled.
+
+## Install
+
+Latch runs on Linux (x86_64) and stores its device key in the GNOME Keyring. You need `gnome-keyring` running with a password-protected login keyring, which GNOME sets up by default. Other desktops work when they start `gnome-keyring-daemon`.
+
+Download a package from the [latest release](https://github.com/Serendeep/latch/releases/latest) and check it against `SHA256SUMS`:
+
+```sh
+sudo apt install ./Latch_*_amd64.deb      # Debian, Ubuntu
+sudo dnf install ./Latch-*.x86_64.rpm     # Fedora
+```
+
+Both packages install the desktop app and the `latch` CLI. On other distributions, use the AppImage and put `latch-linux-x86_64` on your `PATH` as `latch`. See [getting started](https://latch.serendeep.tech/docs/getting-started) for details and for building from source.
+
+Then install the agent skill:
 
 ```sh
 pnpm dlx skills add Serendeep/latch --skill latch --global
 ```
 
-The installer detects Codex, Claude Code, and other compatible agents. Start a new agent session after installation. You can [review the complete skill](integrations/latch/SKILL.md) before installing it.
+The installer detects Codex, Claude Code, and other compatible agents. Start a new agent session afterwards. You can [review the complete skill](integrations/latch/SKILL.md) first. Codex on Linux needs one sandbox setting; see [coding agents](https://latch.serendeep.tech/docs/agents).
 
-## Watch it work
+## What you get
 
-Codex connects a private issue dashboard. Claude adds an issue filter, and T3 Code adds title search. Each video follows the task through Latch approval to the running dashboard.
-
-<details>
-<summary>Codex — connect the project</summary>
-
-https://github.com/user-attachments/assets/0bed94e9-1f2c-4d92-b1c3-9ed8e5f75f0e
-
-</details>
-
-<details>
-<summary>Claude Code — add an issue filter</summary>
-
-https://github.com/user-attachments/assets/40daf8bb-bf24-4d1e-807a-370767ffaf59
-
-</details>
-
-<details>
-<summary>T3 Code — add title search</summary>
-
-https://github.com/user-attachments/assets/02fb3286-3065-4e06-a763-c277a2339daa
-
-</details>
-
-The recordings use the actual agent applications, a local mock GitHub service, sample issues, and generated credentials. T3 Code uses its Codex provider. No real GitHub token or private repository appears in the videos.
-
-### Audit history
-
-A Claude Code request is approved with a newly added secret, and a Codex request for production is denied. The audit history then lists both requests, both decisions, the injection, and the process exit.
-
-[![Latch audit history demo](docs/assets/latch-audit-history.gif)](docs/assets/latch-audit-history.mp4)
-
-[Watch the full-resolution video](docs/assets/latch-audit-history.mp4). The recording shows the real desktop app and `latch` CLI in a disposable session with its own keyring and vault. The terminal commands are typed by a script under the self-reported agent labels, and the secret value is generated for the recording.
+- Secrets organized by project and environment (development, test, staging, production).
+- Import from `.env`, and a comparison against `.env.example`.
+- Reveal one value deliberately, or copy it with timed clipboard clearing.
+- Agent requests that show the exact command and the files it resolves to. You approve one launch, and you can add a missing value in the same popup.
+- Quitting Latch stops every command it launched.
+- Metadata-only audit history of vault operations, requests, decisions, injections, and process exits. It never records values, commands, or executable paths.
+- Encrypted backups. Export every project and secret to one password-protected file, and restore it into a vault on another machine.
 
 ## Current status
 
-Latch is an early development build. Use generated test credentials while evaluating it. Linux supports the vault and command-launch flow with a password-protected GNOME login keyring. macOS and Windows build in CI, but their credential-store adapters and command transport are not ready.
+Latch is early software for Linux. macOS and Windows build in CI, but their credential-store adapters and command transport are not ready. Releases are not signed yet, and there is no automatic updater.
 
-You can currently:
-
-- Organize secrets by project and environment.
-- Import new entries from `.env` and compare expected names from `.env.example`.
-- Reveal one value deliberately or copy it with timed clipboard clearing.
-- Review agent requests, add missing secrets, and approve a single command launch.
-- Keep the app in the tray and unlock from the request popup.
-
-Latch records local audit metadata for vault operations, secret access, requests, decisions, and process exits. The unlocked desktop app shows this history in newest-first pages without secret values, commands, or executable paths. Weekly compressed archives with configurable retention and portable encrypted backups are still planned. There are no signed releases or automatic updates yet.
+Approval controls which process receives a secret. **That process can read and leak it.** Latch does not sandbox approved commands. Latch has not had an external security review. Read the [security model](https://latch.serendeep.tech/docs/security) before storing production credentials, and keep an encrypted backup.
 
 ## The app
 
@@ -84,9 +77,7 @@ These UI previews use sample metadata and concealed values. Latch supports syste
 
 ## Documentation
 
-Read the [documentation](https://latch.serendeep.tech/) for setup, agent integration, vault management, and the security model. The guides live alongside the code and are published with GitHub Pages.
-
-Approval controls which process receives a secret. **That process can read and leak it.** Latch does not sandbox approved commands. Latch has not had an external security review.
+Read the [documentation](https://latch.serendeep.tech/) for setup, agent integration, vault management and backups, and the security model. The guides live alongside the code and are published with GitHub Pages.
 
 ## Contributing
 

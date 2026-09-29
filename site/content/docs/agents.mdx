@@ -21,6 +21,19 @@ pnpm dlx skills add Serendeep/latch --skill latch \
 
 Start a new agent session after installation. The skill tells the agent when and how to request named secrets; it contains no secret values. Review its [`SKILL.md`](https://github.com/Serendeep/latch/blob/main/integrations/latch/SKILL.md) before installing it.
 
+### Codex on Linux
+
+Codex's default `workspace-write` sandbox blocks the local socket the CLI uses to reach the desktop app, so `latch run` exits with code 7. Allow it in `~/.codex/config.toml`:
+
+```toml
+[sandbox_workspace_write]
+network_access = true
+```
+
+This also lets other sandboxed commands use the network. If you'd rather not allow that, approve `latch run` to run outside the sandbox when Codex asks. Claude Code needs no change.
+
+## Request a secret
+
 Register the project directory in the desktop app before requesting access. For a project whose server needs `GITHUB_TOKEN`:
 
 ```sh
