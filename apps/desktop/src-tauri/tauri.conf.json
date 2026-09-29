@@ -55,6 +55,16 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "linux": {
+      "deb": {
+        "depends": ["gnome-keyring"],
+        "files": { "/usr/bin/latch": "../../../target/release/latch" }
+      },
+      "rpm": {
+        "depends": ["gnome-keyring"],
+        "files": { "/usr/bin/latch": "../../../target/release/latch" }
+      }
+    },
     "shortDescription": "Local secret approval for development tools",
     "longDescription": "Store project secrets locally and approve scoped access for commands and coding agents."
   }
