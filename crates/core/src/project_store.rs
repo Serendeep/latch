@@ -89,6 +89,42 @@ impl Database {
         Ok(())
     }
 
+    /// Insert every restored project and secret and one audit event, or nothing at all.
+    pub(crate) fn restore(
+        &mut self,
+        projects: &[ProjectRow],
+        secrets: &[crate::secret_store::SecretRow],
+    ) -> Result<(), BrokerError> {
+        self.audit_capacity()?;
+        let tx = self.connection.transaction()?;
+        let count: i64 = tx.query_row("SELECT count(*) FROM projects", [], |row| row.get(0))?;
+        if count + projects.len() as i64 > 100 {
+            return Err(BrokerError::ProjectLimit);
+        }
+        // Each secret write adds its own creation event, plus one restore event.
+        let events: i64 =
+            tx.query_row("SELECT count(*) FROM audit_events", [], |row| row.get(0))?;
+        if events + secrets.len() as i64 + 1 > 32768 {
+            return Err(BrokerError::AuditUnavailable);
+        }
+        for row in projects {
+            tx.execute(
+                "INSERT INTO projects VALUES (?1,?2,?3,?4,?5)",
+                params![row.id, row.key_id, row.nonce, row.revision, row.ciphertext],
+            )?;
+        }
+        for row in secrets {
+            crate::secret_store::write_secret(&tx, row, None)?;
+        }
+        tx.execute(
+            "INSERT INTO audit_events(occurred_at_ms,operation,result) VALUES (?1,21,1)",
+            [now_ms()],
+        )
+        .map_err(|_| BrokerError::AuditUnavailable)?;
+        tx.commit()?;
+        Ok(())
+    }
+
     pub(crate) fn delete_project(
         &mut self,
         id: &[u8; 16],

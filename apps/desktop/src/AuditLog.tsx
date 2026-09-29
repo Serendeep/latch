@@ -7,7 +7,7 @@ const operations: Record<number, string> = {
   2: "Vault unlock",
   3: "Vault locked",
   4: "Project created",
-  5: "Project renamed",
+  5: "Project updated",
   6: "Project deleted",
   7: "Environment created",
   8: "Environment deleted",
@@ -22,6 +22,8 @@ const operations: Record<number, string> = {
   17: "Request closed",
   18: "Secret injected",
   19: "Process finished",
+  20: "Backup exported",
+  21: "Backup restored",
 };
 
 export default function AuditLog({ epoch }: { epoch: string }) {

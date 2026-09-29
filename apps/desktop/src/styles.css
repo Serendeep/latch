@@ -661,6 +661,19 @@ footer {
   gap: 0.65rem;
   margin-bottom: 1rem;
 }
+.backup-form {
+  display: grid;
+  justify-items: start;
+  gap: 0.6rem;
+}
+.backup-form + .backup-form {
+  margin-top: 1.4rem;
+  padding-top: 1.2rem;
+  border-top: 1px solid var(--border);
+}
+.backup-form .passphrase-field {
+  justify-self: stretch;
+}
 .file-review-list {
   max-height: 40vh;
   overflow: auto;

@@ -74,7 +74,7 @@ def main():
         if os.environ.get("LATCH_TEST_BLANK_KEYRING") == "1":
             # Simulate an unprotected on-disk collection in this disposable store.
             (Path(os.environ["XDG_DATA_HOME"]) / "keyrings/login.keyring").write_bytes(b"[keyring]\ndisplay-name=Login\n")
-        command = ([sys.executable, "tests/native_smoke.py"] if os.environ.get("LATCH_RUN_NATIVE_VAULT") == "1" else ["mise", "exec", "--", "cargo", "test", "-p", "latch-core", "--locked", "isolated_linux_vault_lifecycle", "--", "--ignored", "--test-threads=1"])
+        command = ([sys.executable, "tests/native_smoke.py"] if os.environ.get("LATCH_RUN_NATIVE_VAULT") == "1" else ["mise", "exec", "--", "cargo", "test", "-p", "latch-core", "--locked", "isolated_linux_vault_", "--", "--ignored", "--test-threads=1"])
         result = subprocess.run(command, timeout=180)
         raise SystemExit(result.returncode)
     finally:

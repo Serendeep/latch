@@ -3,6 +3,8 @@
 pub mod audit;
 #[cfg(unix)]
 mod audit_store;
+#[cfg(unix)]
+mod backup;
 pub mod broker;
 pub mod import;
 #[cfg(unix)]

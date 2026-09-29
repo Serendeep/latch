@@ -13,6 +13,7 @@
     "allow-audit-events-list",
     "allow-project-create",
     "allow-project-rename",
+    "allow-project-relink",
     "allow-project-delete",
     "allow-environment-create",
     "allow-environment-delete",
@@ -23,6 +24,9 @@
     "allow-secret-update",
     "allow-secret-delete",
     "allow-secret-reveal",
-    "allow-secret-copy"
+    "allow-secret-copy",
+    "allow-backup-export",
+    "allow-restore-preview",
+    "allow-restore-commit"
   ]
 }

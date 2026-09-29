@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import Projects from "./Projects";
 import AuditLog from "./AuditLog";
+import Backup from "./Backup";
 import { changeVault, getAppStatus, lockVault } from "./api";
 
 import type { VaultAvailability } from "./generated/core";
@@ -8,7 +9,9 @@ type Status = VaultAvailability | "loading" | "error";
 type Theme = "system" | "light" | "dark";
 
 export default function App() {
-  const [section, setSection] = useState<"projects" | "audit">("projects");
+  const [section, setSection] = useState<"projects" | "audit" | "backup">(
+    "projects",
+  );
   const [status, setStatus] = useState<Status>("loading");
   const [attempt, setAttempt] = useState(0);
   const [message, setMessage] = useState("");
@@ -199,7 +202,7 @@ export default function App() {
                   Use at least 15 characters. Spaces count; your passphrase is
                   never trimmed.
                   {status === "absent"
-                    ? " There is no passphrase reset or backup recovery in this development build. Do not add real credentials yet."
+                    ? " There is no passphrase reset. Once your vault is set up, save an encrypted backup from the Backup tab. To move from another machine, create this vault, then restore into it."
                     : ""}
                 </p>
                 <button type="submit">
@@ -253,11 +256,20 @@ export default function App() {
               >
                 Audit history
               </button>
+              <button
+                type="button"
+                aria-current={section === "backup" ? "page" : undefined}
+                onClick={() => setSection("backup")}
+              >
+                Backup
+              </button>
             </nav>
             {section === "projects" ? (
               <Projects key={lockEpoch} epoch={lockEpoch} />
-            ) : (
+            ) : section === "audit" ? (
               <AuditLog key={lockEpoch} epoch={lockEpoch} />
+            ) : (
+              <Backup key={lockEpoch} epoch={lockEpoch} />
             )}
           </>
         ) : null}

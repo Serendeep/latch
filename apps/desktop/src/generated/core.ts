@@ -83,9 +83,13 @@ id: string,
  */
 name: string,
 /**
- * Confirmed canonical directory.
+ * Canonical directory, or the backup's path while unconfirmed.
  */
 directory: string,
+/**
+ * False until a restored project's directory is chosen on this machine.
+ */
+directory_confirmed: boolean,
 /**
  * Decimal revision for optimistic concurrency.
  */
@@ -112,6 +116,41 @@ token: string,
  * Canonical path for explicit review.
  */
 directory: string, };
+export type BackupReceipt = {
+/**
+ * Projects written or added.
+ */
+projects: number,
+/**
+ * Secrets written or added.
+ */
+secrets: number, };
+export type RestoredProject = {
+/**
+ * Display name.
+ */
+name: string,
+/**
+ * Directory recorded in the backup; unconfirmed on this machine.
+ */
+directory: string,
+/**
+ * Environments the project will have.
+ */
+environments: Array<Environment>,
+/**
+ * Number of secrets across all environments.
+ */
+secrets: number, };
+export type RestorePreview = {
+/**
+ * Single-use commit token, valid for five minutes in this unlocked session.
+ */
+token: string,
+/**
+ * Projects the commit would add.
+ */
+projects: Array<RestoredProject>, };
 export type SecretSummary = {
 /**
  * Opaque lowercase hexadecimal identity.

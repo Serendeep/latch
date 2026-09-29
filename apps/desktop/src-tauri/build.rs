@@ -15,6 +15,7 @@ fn main() {
             "audit_events_list",
             "project_create",
             "project_rename",
+            "project_relink",
             "project_delete",
             "environment_create",
             "environment_delete",
@@ -26,6 +27,9 @@ fn main() {
             "secret_delete",
             "secret_reveal",
             "secret_copy",
+            "backup_export",
+            "restore_preview",
+            "restore_commit",
         ]),
     ))
     .expect("Could not build desktop configuration");
