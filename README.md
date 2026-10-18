@@ -86,7 +86,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, checks, and contribution requi
 
 ## Support
 
-If you want to support continued development, you can [buy me a coffee](https://buymeacoffee.com/serendeep).
+Latch is built by [Serendeep Rudraraju](https://serendeep.tech). If you want to support continued development, you can [buy me a coffee](https://buymeacoffee.com/serendeep).
 
 ## License
 
