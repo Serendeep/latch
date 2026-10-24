@@ -2,34 +2,23 @@
 
 use crate::protocol::{MAX_FRAME_BYTES, RunRequest, RunResponse};
 use std::io::{Read, Write};
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 use std::path::PathBuf;
 
 /// Local transport failure without endpoint or payload details.
 #[derive(Debug)]
 pub struct TransportError;
 
-/// Resolve the private Linux runtime endpoint shared by the desktop and CLI.
-#[cfg(target_os = "linux")]
+/// Resolve the private runtime endpoint shared by the desktop and CLI.
+#[cfg(unix)]
 pub fn socket_path() -> Result<PathBuf, TransportError> {
-    use std::os::unix::fs::MetadataExt;
-    let directory = std::env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .ok_or(TransportError)?;
-    let metadata = directory.symlink_metadata().map_err(|_| TransportError)?;
-    if !directory.is_absolute()
-        || metadata.file_type().is_symlink()
-        || !metadata.is_dir()
-        || metadata.uid() != rustix::process::geteuid().as_raw()
-        || metadata.mode() & 0o077 != 0
-    {
-        return Err(TransportError);
-    }
-    Ok(directory.join("latch-development.sock"))
+    crate::platform::runtime_dir()
+        .map(|directory| directory.join("latch-development.sock"))
+        .ok_or(TransportError)
 }
 
 /// Send one request and read one final response from the owner-only endpoint.
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 pub fn exchange(request: &RunRequest) -> Result<RunResponse, TransportError> {
     use std::os::unix::{
         fs::{FileTypeExt, MetadataExt},
@@ -88,7 +77,7 @@ fn read_frame(reader: &mut impl Read) -> Result<Vec<u8>, TransportError> {
     Ok(bytes)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn read_response(reader: &mut impl Read) -> Result<RunResponse, TransportError> {
     let bytes = read_frame(reader)?;
     serde_json::from_slice(&bytes).map_err(|_| TransportError)

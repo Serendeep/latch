@@ -4,6 +4,8 @@
 
 There is no supported production release yet. The development build supports vault creation, passphrase unlocking, project metadata, secret management, individual reveal, clipboard copy, configuration import, example-name comparison, and one-time approved command launch on Linux. Native folder-picker, clipboard, and launch behavior remain unqualified. Recovery is not implemented. Do not entrust it with credentials.
 
+Latch has not had an external security review. No release claims that its cryptography, local IPC, approval handling, or launch behavior has been independently verified.
+
 ## Reporting a vulnerability
 
 Do not include credentials, vault files, keychain contents, recovery material, or unredacted command output in reports.

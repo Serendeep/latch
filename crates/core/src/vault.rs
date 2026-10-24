@@ -89,7 +89,7 @@ impl VaultKey {
         &self.2
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     pub(crate) fn record(
         &self,
         encrypt: bool,
@@ -165,7 +165,7 @@ impl WrappedVaultKey {
     }
 
     /// Public wrapping nonce for the durable reservation record.
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     pub(crate) fn nonce(&self) -> &[u8] {
         &self.0[NONCE]
     }
@@ -254,7 +254,7 @@ impl PreparedVault {
     }
 
     /// Public nonce to reserve before encryption begins.
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     pub(crate) fn nonce(&self) -> &[u8] {
         &self.header[NONCE]
     }
@@ -340,20 +340,20 @@ pub struct VaultSession {
 }
 
 impl VaultSession {
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     pub(crate) fn has_pending(&self) -> bool {
         self.pending.is_some()
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     pub(crate) fn has_key(&self) -> bool {
         self.key.is_some()
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     pub(crate) fn is_current(&self, ticket: &UnlockTicket) -> bool {
         Arc::ptr_eq(&self.identity, &ticket.1) && self.pending == Some(ticket.0)
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     pub(crate) fn key(&mut self) -> Option<&VaultKey> {
         if !self.is_unlocked() {
             return None;

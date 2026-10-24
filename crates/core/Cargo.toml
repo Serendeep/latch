@@ -18,11 +18,13 @@ chacha20poly1305 = { version = "=0.11.0", default-features = false, features = [
 getrandom = "=0.4.3"
 zeroize = { workspace = true, features = ["serde"] }
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(unix)'.dependencies]
 rusqlite = { version = "=0.40.2", default-features = false, features = ["bundled"] }
+rustix = { version = "=1.1.4", features = ["process", "fs", "net"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
 secret-service = { version = "=5.2.0", features = ["rt-async-io-crypto-rust"] }
 zbus = { version = "=5.19.0", default-features = false, features = ["blocking-api", "async-io"] }
-rustix = { version = "=1.1.4", features = ["process", "fs", "net"] }
 
 [dev-dependencies]
 tempfile = "=3.27.0"

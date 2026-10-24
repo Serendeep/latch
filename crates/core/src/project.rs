@@ -246,7 +246,7 @@ pub struct DirectorySelection {
     pub directory: String,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 pub(crate) fn hex(id: &[u8; 16]) -> String {
     id.iter().map(|byte| format!("{byte:02x}")).collect()
 }
@@ -267,7 +267,7 @@ pub(crate) fn parse_id(input: &str) -> Result<[u8; 16], ProjectError> {
     Ok(id)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 impl Project {
     pub(crate) fn summary(&self) -> ProjectSummary {
         ProjectSummary {
@@ -352,7 +352,7 @@ impl Project {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 pub(crate) fn checked_directory(path: &Path) -> Result<Zeroizing<String>, ProjectError> {
     canonical_directory(path)
 }

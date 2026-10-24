@@ -1,23 +1,23 @@
 //! Shared request contracts and the desktop-owned local vault. No secret delivery yet.
 
 pub mod audit;
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 mod audit_store;
 pub mod broker;
 pub mod import;
-#[cfg(target_os = "linux")]
-mod keystore;
+#[cfg(unix)]
+pub mod platform;
 pub mod process;
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 mod process_store;
 pub mod project;
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 mod project_store;
 pub mod protocol;
 pub mod secret;
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 mod secret_store;
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 mod storage;
 pub mod transport;
 pub mod vault;

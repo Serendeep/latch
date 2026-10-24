@@ -14,6 +14,14 @@ const review = {
   directory: "/tmp/example",
   environment: "development",
   executable: "/usr/bin/env",
+  launch: [
+    {
+      role: "program",
+      found: "/usr/bin/env",
+      target: "/usr/bin/env",
+      may_select_runtime: false,
+    },
+  ],
   args: ["printenv"],
   shell: false,
   secrets: [],
@@ -85,4 +93,38 @@ test("polling an unchanged request preserves focus while entering a value", asyn
     timeout: 1500,
   });
   expect(document.activeElement === field).toBe(true);
+});
+
+test("shows where a shim links and that it may choose the runtime", async () => {
+  vi.mocked(invoke).mockImplementation((command) =>
+    Promise.resolve(
+      command === "agent_request_view"
+        ? {
+            ...review,
+            executable: "node",
+            launch: [
+              {
+                role: "program",
+                found: "/home/dev/.local/share/mise/shims/node",
+                target: "/opt/homebrew/Cellar/mise/2026.9.0/bin/mise",
+                may_select_runtime: true,
+              },
+            ],
+          }
+        : null,
+    ),
+  );
+  render(<AgentRequest epoch="7" />);
+  expect(
+    await screen.findByText("/home/dev/.local/share/mise/shims/node"),
+  ).toBeVisible();
+  expect(screen.getByText("links to")).toBeVisible();
+  expect(
+    screen.getByText("/opt/homebrew/Cellar/mise/2026.9.0/bin/mise"),
+  ).toBeVisible();
+  expect(
+    screen.getByText(
+      "This launcher may choose which runtime to start when it runs.",
+    ),
+  ).toBeVisible();
 });

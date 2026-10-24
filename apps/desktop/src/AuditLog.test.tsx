@@ -42,3 +42,27 @@ test("shows allowlisted agent metadata and pages with an opaque cursor", async (
     cursor: "3",
   });
 });
+
+test("labels a request rejected because its command was not found", async () => {
+  vi.mocked(invoke).mockResolvedValueOnce({
+    events: [
+      {
+        sequence: "9",
+        occurred_at_ms: "1790000000000",
+        operation: 16,
+        result: 12,
+        request_id: "e".repeat(32),
+        job_id: null,
+        project_id: null,
+        environment_id: null,
+        secret_id: null,
+        agent: "codex",
+        peer_uid: "1000",
+        peer_pid: "77",
+      },
+    ],
+    next_cursor: null,
+  });
+  render(<AuditLog epoch="7" />);
+  expect(await screen.findByText("Command not found")).toBeVisible();
+});

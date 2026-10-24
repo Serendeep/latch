@@ -56,7 +56,7 @@ test("a late metadata response cannot repopulate the locked UI", async () => {
       });
     if (command === "vault_lock") state = "locked";
     return Promise.resolve({
-      protocol_version: 1,
+      protocol_version: 2,
       lock_epoch: "1",
       vault: state,
     });

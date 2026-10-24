@@ -734,14 +734,14 @@ footer {
 .request-command,
 .request-secrets {
   display: grid;
-  gap: 8px;
-  margin: 20px 0 0;
+  gap: 6px;
+  margin: 16px 0 0;
 }
 .request-command code {
   display: block;
   max-height: 7rem;
   overflow: auto;
-  padding: 12px 14px;
+  padding: 8px 12px;
   border: 1px solid var(--border);
   background: var(--elevated);
   border-radius: 8px;
@@ -749,6 +749,32 @@ footer {
   overflow-wrap: anywhere;
   font-size: 0.8rem;
   line-height: 1.6;
+}
+.request-launch {
+  display: grid;
+  gap: 6px;
+  margin: 16px 0 0;
+}
+.request-launch > span:first-child,
+.launch-role,
+.launch-link,
+.launch-note {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+.request-launch ol {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.request-launch li {
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+}
+.request-launch code {
+  font-size: 0.75rem;
 }
 .request-secrets ul {
   display: flex;
@@ -767,8 +793,8 @@ footer {
 .request-missing {
   display: grid;
   gap: 16px;
-  margin-top: 24px;
-  padding-top: 20px;
+  margin-top: 16px;
+  padding-top: 14px;
   border-top: 1px solid var(--border);
 }
 .request-missing > span {
@@ -796,7 +822,7 @@ footer {
   background: var(--surface);
 }
 .request-footer .dialog-note {
-  margin: 0 0 14px;
+  margin: 0 0 8px;
   font-size: 0.75rem;
 }
 .request-footer .dialog-actions {

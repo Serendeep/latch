@@ -47,6 +47,14 @@ https://github.com/user-attachments/assets/02fb3286-3065-4e06-a763-c277a2339daa
 
 The recordings use the actual agent applications, a local mock GitHub service, sample issues, and generated credentials. T3 Code uses its Codex provider. No real GitHub token or private repository appears in the videos.
 
+### Audit history
+
+A Claude Code request is approved with a newly added secret, and a Codex request for production is denied. The audit history then lists both requests, both decisions, the injection, and the process exit.
+
+[![Latch audit history demo](docs/assets/latch-audit-history.gif)](docs/assets/latch-audit-history.mp4)
+
+[Watch the full-resolution video](docs/assets/latch-audit-history.mp4). The recording shows the real desktop app and `latch` CLI in a disposable session with its own keyring and vault. The terminal commands are typed by a script under the self-reported agent labels, and the secret value is generated for the recording.
+
 ## Current status
 
 Latch is an early development build. Use generated test credentials while evaluating it. Linux supports the vault and command-launch flow with a password-protected GNOME login keyring. macOS and Windows build in CI, but their credential-store adapters and command transport are not ready.
@@ -78,7 +86,7 @@ These UI previews use sample metadata and concealed values. Latch supports syste
 
 Read the [documentation](https://latch.serendeep.tech/) for setup, agent integration, vault management, and the security model. The guides live alongside the code and are published with GitHub Pages.
 
-Approval controls which process receives a secret. **That process can read and leak it.** Latch does not sandbox approved commands.
+Approval controls which process receives a secret. **That process can read and leak it.** Latch does not sandbox approved commands. Latch has not had an external security review.
 
 ## Contributing
 

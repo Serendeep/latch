@@ -1,7 +1,7 @@
 //! Desktop-owned worker. Blocking storage/KDF calls never hold the session lock.
 use crate::{AppStatus, VaultAvailability, protocol, vault::Passphrase};
 use serde::Serialize;
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
 
 /// Fixed public error codes. Source errors are deliberately discarded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -23,6 +23,8 @@ pub enum BrokerError {
     InvalidSecret,
     /// A command request, executable, or project binding failed validation.
     InvalidRun,
+    /// The command, its `#!` interpreter, or its `env` target is not on the request's PATH.
+    CommandNotFound,
     /// A secret with this name already exists in the selected environment.
     SecretExists,
     /// The selected environment already contains 256 secrets.
@@ -37,7 +39,7 @@ pub enum BrokerError {
     StorageUnavailable,
     /// Another process already owns this vault directory.
     AlreadyRunning,
-    /// The qualified, unlocked GNOME login keyring is not available.
+    /// The qualified, unlocked operating-system credential store is not available.
     KeyStoreUnavailable,
     /// Durable audit metadata could not be written.
     AuditUnavailable,
@@ -245,7 +247,7 @@ impl From<std::io::Error> for BrokerError {
         Self::StorageUnavailable
     }
 }
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 impl From<rusqlite::Error> for BrokerError {
     fn from(_: rusqlite::Error) -> Self {
         Self::StorageUnavailable
@@ -254,38 +256,48 @@ impl From<rusqlite::Error> for BrokerError {
 
 /// Handle shared with narrow desktop commands. It never serializes key material.
 pub struct Broker {
-    #[cfg(target_os = "linux")]
-    inner: linux::Handle,
+    #[cfg(unix)]
+    inner: Option<worker::Handle>,
+}
+
+fn unavailable() -> AppStatus {
+    AppStatus {
+        protocol_version: protocol::VERSION,
+        vault: VaultAvailability::Unavailable,
+        lock_epoch: "0".into(),
+    }
 }
 
 impl Broker {
     /// Start one worker using a directory resolved by Rust, never supplied by IPC.
     pub fn start(directory: PathBuf) -> Self {
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         {
             Self {
-                inner: linux::Handle::start(directory),
+                inner: crate::platform::QUALIFIED.then(|| worker::Handle::start(directory)),
             }
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(unix))]
         {
             let _ = directory;
             Self {}
         }
     }
+    #[cfg(unix)]
+    fn worker(&self) -> Result<&worker::Handle, BrokerError> {
+        self.inner.as_ref().ok_or(BrokerError::Unsupported)
+    }
     /// Read public state without reading the OS store or blocking on KDF work.
     pub fn status(&self) -> Result<AppStatus, BrokerError> {
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         {
-            self.inner.status()
+            self.inner
+                .as_ref()
+                .map_or_else(|| Ok(unavailable()), worker::Handle::status)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(unix))]
         {
-            Ok(AppStatus {
-                protocol_version: protocol::VERSION,
-                vault: VaultAvailability::Unavailable,
-                lock_epoch: "0".into(),
-            })
+            Ok(unavailable())
         }
     }
     /// Create one vault and return locked. Call from a blocking task, not the UI.
@@ -307,11 +319,11 @@ impl Broker {
             return Err(BrokerError::InvalidState);
         }
         let epoch: u64 = epoch.parse().map_err(|_| BrokerError::InvalidState)?;
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         {
-            self.inner.perform(create, password, epoch)
+            self.worker()?.perform(create, password, epoch)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(unix))]
         {
             let _ = (create, password, epoch);
             Err(BrokerError::Unsupported)
@@ -323,11 +335,11 @@ impl Broker {
         path: PathBuf,
         epoch: String,
     ) -> Result<crate::project::DirectorySelection, BrokerError> {
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         {
-            self.inner.select_directory(path, epoch)
+            self.worker()?.select_directory(path, epoch)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(unix))]
         {
             let _ = (path, epoch);
             Err(BrokerError::Unsupported)
@@ -366,11 +378,11 @@ impl Broker {
                 }
             }
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         {
-            self.inner.projects(command, epoch)
+            self.worker()?.projects(command, epoch)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(unix))]
         {
             let _ = (command, epoch);
             Err(BrokerError::Unsupported)
@@ -391,11 +403,11 @@ impl Broker {
         }) {
             return Err(BrokerError::InvalidState);
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         {
-            self.inner.audit_events(cursor, epoch)
+            self.worker()?.audit_events(cursor, epoch)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(unix))]
         {
             let _ = (cursor, epoch);
             Err(BrokerError::Unsupported)
@@ -478,11 +490,11 @@ impl Broker {
             }
             _ => {}
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         {
-            self.inner.secrets(command, epoch)
+            self.worker()?.secrets(command, epoch)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(unix))]
         {
             let _ = (command, epoch);
             Err(BrokerError::Unsupported)
@@ -501,13 +513,43 @@ impl Broker {
         if request.names.is_empty() {
             return Err(BrokerError::InvalidRun);
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         {
-            self.inner.prepare_run(request, request_id, peer, epoch)
+            self.worker()?.prepare_run(request, request_id, peer, epoch)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(unix))]
         {
             let _ = (request, request_id, peer, epoch);
+            Err(BrokerError::Unsupported)
+        }
+    }
+
+    /// Reject a request whose command cannot be resolved, before any window or vault access.
+    /// Returns `CommandNotFound` and audits it; other resolution errors are returned unaudited
+    /// because `prepare_run` repeats resolution and reports them after review.
+    pub fn screen_run(
+        &self,
+        request: &protocol::RunRequest,
+        request_id: [u8; 16],
+        peer: crate::process::PeerIdentity,
+    ) -> Result<(), BrokerError> {
+        request.validate().map_err(|_| BrokerError::InvalidRun)?;
+        #[cfg(unix)]
+        {
+            match crate::process::resolve_launch(&request.executable, &request.path) {
+                Err(BrokerError::CommandNotFound) => {
+                    // The rejection stands even if its audit record cannot be written.
+                    let _ = self
+                        .worker()?
+                        .reject_request(request_id, request.agent, peer);
+                    Err(BrokerError::CommandNotFound)
+                }
+                result => result.map(|_| ()),
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (request_id, peer);
             Err(BrokerError::Unsupported)
         }
     }
@@ -518,11 +560,11 @@ impl Broker {
         run: crate::process::PreparedRun,
         epoch: String,
     ) -> Result<(), BrokerError> {
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         {
-            self.inner.close_run(run, epoch, 4)
+            self.worker()?.close_run(run, epoch, 4)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(unix))]
         {
             let _ = (run, epoch);
             Err(BrokerError::Unsupported)
@@ -535,11 +577,11 @@ impl Broker {
         run: crate::process::PreparedRun,
         epoch: String,
     ) -> Result<(), BrokerError> {
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         {
-            self.inner.close_run(run, epoch, 6)
+            self.worker()?.close_run(run, epoch, 6)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(unix))]
         {
             let _ = (run, epoch);
             Err(BrokerError::Unsupported)
@@ -552,11 +594,11 @@ impl Broker {
         run: crate::process::PreparedRun,
         epoch: String,
     ) -> Result<(), BrokerError> {
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         {
-            self.inner.close_run(run, epoch, 5)
+            self.worker()?.close_run(run, epoch, 5)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(unix))]
         {
             let _ = (run, epoch);
             Err(BrokerError::Unsupported)
@@ -570,38 +612,56 @@ impl Broker {
         missing: Vec<crate::process::MissingSecretInput>,
         epoch: String,
     ) -> Result<crate::process::LaunchReceipt, BrokerError> {
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         {
-            self.inner.launch_run(run, missing, epoch)
+            self.worker()?.launch_run(run, missing, epoch)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(unix))]
         {
             let _ = (run, missing, epoch);
             Err(BrokerError::Unsupported)
         }
     }
 
+    /// Stop every running launched job (SIGTERM, then SIGKILL after five seconds) and wait until
+    /// their exits are audited. Called on explicit Quit.
+    pub fn stop_jobs(&self) {
+        self.stop_jobs_after(Duration::from_secs(5));
+    }
+
+    pub(crate) fn stop_jobs_after(&self, grace: Duration) {
+        #[cfg(unix)]
+        if let Some(worker) = &self.inner {
+            worker.stop_jobs(grace);
+        }
+        #[cfg(not(unix))]
+        let _ = grace;
+    }
+
     /// Drop the live key and invalidate pending work immediately, even on disk failure.
     pub fn lock(&self) -> Result<AppStatus, BrokerError> {
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         {
-            self.inner.lock()
+            match &self.inner {
+                Some(worker) => worker.lock(),
+                None => self.status(),
+            }
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(unix))]
         {
             self.status()
         }
     }
 }
 
-#[cfg(target_os = "linux")]
-mod linux {
+#[cfg(unix)]
+mod worker {
     use super::*;
     use crate::{
-        keystore::KeyStore,
+        platform::KeyStore,
         process::{
-            ExecutableIdentity, LaunchReceipt, MissingSecretInput, PeerIdentity, PreparedRun,
-            ReviewedSecret, RunReview, into_parts,
+            LaunchReceipt, MissingSecretInput, PeerIdentity, PreparedRun, ReviewedSecret,
+            RunReview, into_parts, resolve_launch,
         },
         project::{DirectorySelection, Project, ProjectPage, hex, parse_id, random_id},
         project_store::ProjectRow,
@@ -692,6 +752,12 @@ mod linux {
             result: u8,
             reply: SyncSender<Result<(), BrokerError>>,
         },
+        RejectRequest {
+            request_id: [u8; 16],
+            agent: protocol::AgentKind,
+            peer: PeerIdentity,
+            reply: SyncSender<Result<(), BrokerError>>,
+        },
         LaunchRun {
             run: PreparedRun,
             missing: Vec<MissingSecretInput>,
@@ -704,9 +770,14 @@ mod linux {
             signal: Option<i32>,
         },
     }
+    /// Launched jobs until their exit is audited. `Some(pid)` until the observer reaps the leader;
+    /// an unreaped leader keeps its PID, and so its process-group ID, from being reused.
+    type LiveJobs = Arc<Mutex<std::collections::HashMap<[u8; 16], Option<rustix::process::Pid>>>>;
+
     pub(super) struct Handle {
         state: Arc<Mutex<Shared>>,
         busy: Arc<AtomicBool>,
+        jobs: LiveJobs,
         sender: Option<Arc<SyncSender<Work>>>,
         thread: Option<std::thread::JoinHandle<()>>,
     }
@@ -728,9 +799,19 @@ mod linux {
             let sender = Arc::new(sender);
             let worker_sender = Arc::downgrade(&sender);
             let worker_state = Arc::clone(&state);
+            let jobs = LiveJobs::default();
+            let worker_jobs = Arc::clone(&jobs);
             let thread = std::thread::Builder::new()
                 .name("latch-vault".into())
-                .spawn(move || worker(directory, worker_state, receiver, worker_sender))
+                .spawn(move || {
+                    worker(
+                        directory,
+                        worker_state,
+                        receiver,
+                        worker_sender,
+                        worker_jobs,
+                    )
+                })
                 .ok();
             if thread.is_none() {
                 state.lock().unwrap_or_else(|e| e.into_inner()).failure =
@@ -739,9 +820,44 @@ mod linux {
             Self {
                 state,
                 busy,
+                jobs,
                 sender: Some(sender),
                 thread,
             }
+        }
+
+        /// SIGTERM every live job's process group, SIGKILL what remains after `grace`, then wait
+        /// (bounded) until the worker has audited every exit.
+        pub(super) fn stop_jobs(&self, grace: Duration) {
+            use rustix::process::{Signal, kill_process_group};
+            let signal = |signal: Signal| {
+                let live = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
+                for pid in live.values().flatten() {
+                    let _ = kill_process_group(*pid, signal);
+                }
+                live.values().any(Option::is_some)
+            };
+            let wait = |limit: Duration, done: &dyn Fn(&LiveJobs) -> bool| {
+                let deadline = std::time::Instant::now() + limit;
+                while !done(&self.jobs) && std::time::Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            };
+            let running = |jobs: &LiveJobs| {
+                jobs.lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .values()
+                    .any(Option::is_some)
+            };
+            if signal(Signal::TERM) {
+                wait(grace, &|jobs| !running(jobs));
+                if running(&self.jobs) {
+                    signal(Signal::KILL);
+                }
+            }
+            wait(Duration::from_secs(2), &|jobs| {
+                jobs.lock().unwrap_or_else(|e| e.into_inner()).is_empty()
+            });
         }
 
         pub(super) fn status(&self) -> Result<AppStatus, BrokerError> {
@@ -1038,6 +1154,29 @@ mod linux {
             })
         }
 
+        // Needs no vault key: rejected requests are audited even while locked.
+        pub(super) fn reject_request(
+            &self,
+            request_id: [u8; 16],
+            agent: protocol::AgentKind,
+            peer: PeerIdentity,
+        ) -> Result<(), BrokerError> {
+            let (reply, receive) = mpsc::sync_channel(1);
+            self.sender
+                .as_ref()
+                .ok_or(BrokerError::StorageUnavailable)?
+                .try_send(Work::RejectRequest {
+                    request_id,
+                    agent,
+                    peer,
+                    reply,
+                })
+                .map_err(|_| BrokerError::Busy)?;
+            receive
+                .recv()
+                .map_err(|_| BrokerError::StorageUnavailable)?
+        }
+
         pub(super) fn launch_run(
             &self,
             run: PreparedRun,
@@ -1121,6 +1260,7 @@ mod linux {
         state: Arc<Mutex<Shared>>,
         receiver: Receiver<Work>,
         sender: std::sync::Weak<SyncSender<Work>>,
+        jobs: LiveJobs,
     ) {
         let initialized = (|| {
             let db = Database::open(&directory)?;
@@ -1243,6 +1383,14 @@ mod linux {
                     }
                     let _ = reply.send(result);
                 }
+                Work::RejectRequest {
+                    request_id,
+                    agent,
+                    peer,
+                    reply,
+                } => {
+                    let _ = reply.send(db.record_rejected_request(&request_id, agent, peer));
+                }
                 Work::DenyRun {
                     run,
                     epoch,
@@ -1263,7 +1411,8 @@ mod linux {
                     epoch,
                     reply,
                 } => {
-                    let mut result = launch_run(&mut db, &state, &sender, &mut run, missing, epoch);
+                    let mut result =
+                        launch_run(&mut db, &state, &sender, &jobs, &mut run, missing, epoch);
                     if let Err(error) = &result
                         && !matches!(
                             error,
@@ -1297,7 +1446,11 @@ mod linux {
                     exit_code,
                     signal,
                 } => {
-                    if db.process_exit(&job_id, exit_code, signal).is_err() {
+                    let recorded = db.process_exit(&job_id, exit_code, signal);
+                    jobs.lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .remove(&job_id);
+                    if recorded.is_err() {
                         let mut shared = state.lock().unwrap_or_else(|e| e.into_inner());
                         shared.failure = Some(BrokerError::AuditUnavailable);
                         shared.session.lock();
@@ -1647,25 +1800,9 @@ mod linux {
         Err(BrokerError::InvalidRun)
     }
 
-    fn executable_identity(path: &std::path::Path) -> Result<ExecutableIdentity, BrokerError> {
-        use std::os::unix::fs::MetadataExt;
-        if !path.is_absolute() {
-            return Err(BrokerError::InvalidRun);
-        }
-        let metadata = path.metadata().map_err(|_| BrokerError::InvalidRun)?;
-        if !metadata.is_file() || metadata.mode() & 0o111 == 0 || metadata.mode() & 0o6000 != 0 {
-            return Err(BrokerError::InvalidRun);
-        }
-        Ok(ExecutableIdentity {
-            device: metadata.dev(),
-            inode: metadata.ino(),
-            length: metadata.len(),
-            modified_seconds: metadata.mtime(),
-            modified_nanoseconds: metadata.mtime_nsec(),
-        })
-    }
-
-    fn baseline_environment() -> Result<Vec<(String, std::ffi::OsString)>, BrokerError> {
+    fn baseline_environment(
+        search_path: &str,
+    ) -> Result<Vec<(String, std::ffi::OsString)>, BrokerError> {
         let mut values = Vec::new();
         for name in ["HOME", "TMPDIR", "LANG"] {
             if let Some(value) = std::env::var_os(name) {
@@ -1676,12 +1813,10 @@ mod linux {
                 values.push((name.into(), value));
             }
         }
-        if let Some(path) = std::env::var_os("PATH") {
-            if std::env::split_paths(&path).any(|entry| !entry.is_absolute()) {
-                return Err(BrokerError::InvalidRun);
-            }
-            values.push(("PATH".into(), path));
+        if !protocol::valid_search_path(search_path) {
+            return Err(BrokerError::InvalidRun);
         }
+        values.push(("PATH".into(), search_path.into()));
         for (name, value) in std::env::vars_os() {
             let Some(name) = name.to_str() else { continue };
             if name.starts_with("LC_") && name.len() <= 64 {
@@ -1699,7 +1834,8 @@ mod linux {
         peer: PeerIdentity,
         epoch: u64,
     ) -> Result<PreparedRun, BrokerError> {
-        let (agent, environment, locator, executable, args, shell, names) = into_parts(request);
+        let (agent, environment, locator, requested, args, shell, names, search_path) =
+            into_parts(request);
         let (project_row, project) = open_project(db, state, epoch, &locator)?;
         let environment_id = project
             .environments()
@@ -1707,15 +1843,12 @@ mod linux {
             .find(|item| item.kind() == environment)
             .map(|item| *item.id())
             .ok_or(BrokerError::InvalidRun)?;
-        let executable = std::path::Path::new(&executable)
-            .canonicalize()
-            .map_err(|_| BrokerError::InvalidRun)?;
-        let identity = executable_identity(&executable)?;
+        let plan = resolve_launch(&requested, &search_path)?;
         let directory = std::path::PathBuf::from(project.directory());
         if crate::project::checked_directory(&directory)?.as_str() != project.directory() {
             return Err(BrokerError::InvalidRun);
         }
-        let baseline = baseline_environment()?;
+        let baseline = baseline_environment(&search_path)?;
         if names.iter().any(|name| {
             baseline
                 .iter()
@@ -1755,10 +1888,6 @@ mod linux {
                 missing.push(name);
             }
         }
-        let executable_text = executable
-            .to_str()
-            .ok_or(BrokerError::InvalidRun)?
-            .to_owned();
         let project_revision = project_row.revision;
         let view = RunReview {
             id: hex(&request_id),
@@ -1767,7 +1896,8 @@ mod linux {
             project_name: project.name().to_owned(),
             directory: project.directory().to_owned(),
             environment,
-            executable: executable_text,
+            executable: requested.clone(),
+            launch: plan.steps()?,
             args: args.clone(),
             shell,
             secrets: summaries,
@@ -1780,8 +1910,9 @@ mod linux {
             environment_id,
             project_revision,
             directory,
-            executable,
-            executable_identity: identity,
+            requested,
+            search_path,
+            plan,
             args,
             agent,
             peer,
@@ -1811,11 +1942,12 @@ mod linux {
         db: &mut Database,
         state: &Mutex<Shared>,
         sender: &std::sync::Weak<SyncSender<Work>>,
+        jobs: &LiveJobs,
         run: &mut PreparedRun,
         missing: Vec<MissingSecretInput>,
         epoch: u64,
     ) -> Result<LaunchReceipt, BrokerError> {
-        use std::os::unix::process::ExitStatusExt;
+        use std::os::unix::process::{CommandExt, ExitStatusExt};
         use std::process::{Command, Stdio};
 
         let (row, project) = open_project(db, state, epoch, &hex(&run.project_id))?;
@@ -1826,7 +1958,8 @@ mod linux {
                 .environments()
                 .iter()
                 .any(|item| item.id() == &run.environment_id)
-            || executable_identity(&run.executable)? != run.executable_identity
+            || !resolve_launch(&run.requested, &run.search_path)
+                .is_ok_and(|current| current.same_files(&run.plan))
         {
             return Err(BrokerError::RevisionConflict);
         }
@@ -1844,7 +1977,7 @@ mod linux {
         if run.missing.iter().any(|name| !supplied.contains_key(name)) {
             return Err(BrokerError::InvalidSecret);
         }
-        let baseline = baseline_environment()?;
+        let baseline = baseline_environment(&run.search_path)?;
         let mut values = Vec::with_capacity(run.secrets.len() + run.missing.len());
         let mut new_rows = Vec::with_capacity(run.missing.len());
         let mut shared = state.lock().map_err(|_| BrokerError::StorageUnavailable)?;
@@ -1913,8 +2046,10 @@ mod linux {
         }
         let job_id = random_id()?;
         db.consume_launch(run, &new_rows, &job_id)?;
-        let mut command = Command::new(&run.executable);
+        let mut command = Command::new(&run.plan.program().target);
         command
+            .arg0(&run.requested)
+            .process_group(0)
             .args(&run.args)
             .current_dir(&run.directory)
             .env_clear()
@@ -1936,8 +2071,25 @@ mod linux {
         };
         let _ = db.launch_result(&job_id, true);
         let observer = sender.upgrade().ok_or(BrokerError::StorageUnavailable)?;
+        let pid = rustix::process::Pid::from_child(&child);
+        jobs.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(job_id, Some(pid));
+        let observer_jobs = Arc::clone(jobs);
         std::thread::spawn(move || {
-            let status = child.wait().ok();
+            use rustix::process::{WaitId, WaitIdOptions, waitid};
+            while let Err(rustix::io::Errno::INTR) = waitid(
+                WaitId::Pid(pid),
+                WaitIdOptions::EXITED | WaitIdOptions::NOWAIT,
+            ) {}
+            // Mark reaped under the registry lock so `stop_jobs` never signals a reused group ID.
+            let status = {
+                let mut live = observer_jobs.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(entry) = live.get_mut(&job_id) {
+                    *entry = None;
+                }
+                child.wait().ok()
+            };
             let _ = observer.send(Work::JobExit {
                 job_id,
                 exit_code: status.as_ref().and_then(std::process::ExitStatus::code),
@@ -2426,7 +2578,7 @@ mod linux {
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
-    use crate::{keystore::KeyStore, storage::Database};
+    use crate::{platform::KeyStore, storage::Database};
     use std::{
         sync::Arc,
         time::{Duration, Instant},
@@ -2712,6 +2864,7 @@ mod tests {
                     executable: "/usr/bin/env".into(),
                     args: vec![],
                     shell: false,
+                    path: "/usr/bin:/bin".into(),
                 },
                 crate::project::random_id().unwrap(),
                 crate::process::PeerIdentity {
@@ -2733,6 +2886,7 @@ mod tests {
                     executable: "/usr/bin/env".into(),
                     args: vec![],
                     shell: false,
+                    path: "/usr/bin:/bin".into(),
                 },
                 crate::project::random_id().unwrap(),
                 crate::process::PeerIdentity {
@@ -2785,6 +2939,34 @@ mod tests {
                 epoch.clone(),
             )
             .unwrap();
+        let unknown = protocol::RunRequest {
+            protocol_version: protocol::VERSION,
+            agent: protocol::AgentKind::Codex,
+            project: project_id.clone(),
+            environment: protocol::Environment::Development,
+            names: vec!["SERVICE_TOKEN".into()],
+            executable: "latch-test-not-installed".into(),
+            args: vec![],
+            shell: false,
+            path: "/usr/bin:/bin".into(),
+        };
+        let unknown_id = crate::project::random_id().unwrap();
+        assert_eq!(
+            broker.screen_run(
+                &unknown,
+                unknown_id,
+                crate::process::PeerIdentity {
+                    uid: rustix::process::geteuid().as_raw(),
+                    pid: std::process::id(),
+                },
+            ),
+            Err(BrokerError::CommandNotFound)
+        );
+        let history = broker.audit_events(None, epoch.clone()).unwrap();
+        assert!(history.events.iter().any(|event| event.operation == 16
+            && event.result == 12
+            && event.request_id.as_deref() == Some(crate::project::hex(&unknown_id).as_str())
+            && event.project_id.is_none()));
         let marker = project_dir.path().join("launch-result");
         let request = protocol::RunRequest {
             protocol_version: protocol::VERSION,
@@ -2792,14 +2974,16 @@ mod tests {
             project: project_id.clone(),
             environment: protocol::Environment::Development,
             names: vec!["SERVICE_TOKEN".into(), "NEW_AGENT_TOKEN".into()],
-            executable: "/bin/sh".into(),
+            executable: "sh".into(),
             args: vec![
                 "-c".into(),
-                "printf '%s|%s' \"$SERVICE_TOKEN\" \"$NEW_AGENT_TOKEN\" > \"$1\"".into(),
+                "printf '%s|%s|%s' \"$SERVICE_TOKEN\" \"$NEW_AGENT_TOKEN\" \"$PATH\" > \"$1.tmp\" && mv \"$1.tmp\" \"$1\""
+                    .into(),
                 "latch-test".into(),
                 marker.to_string_lossy().into_owned(),
             ],
             shell: true,
+            path: "/nonexistent/agent/bin:/usr/bin:/bin".into(),
         };
         let run = broker
             .prepare_run(
@@ -2813,6 +2997,8 @@ mod tests {
             )
             .unwrap();
         assert!(run.view().secrets.len() == 1 && run.view().missing == ["NEW_AGENT_TOKEN"]);
+        assert_eq!(run.view().executable, "sh");
+        assert!(run.view().launch[0].found.ends_with("/sh"));
         let new_value = password();
         let review_json = serde_json::to_string(run.view()).unwrap();
         assert!(!review_json.contains(secret_value.as_str()));
@@ -2833,8 +3019,73 @@ mod tests {
         }
         assert_eq!(
             std::fs::read_to_string(&marker).unwrap(),
-            format!("{}|{}", secret_value.as_str(), new_value.as_str())
+            format!(
+                "{}|{}|/nonexistent/agent/bin:/usr/bin:/bin",
+                secret_value.as_str(),
+                new_value.as_str()
+            )
         );
+        let launch_job = |script: &str| {
+            let run = broker
+                .prepare_run(
+                    protocol::RunRequest {
+                        protocol_version: protocol::VERSION,
+                        agent: protocol::AgentKind::Other,
+                        project: project_id.clone(),
+                        environment: protocol::Environment::Development,
+                        names: vec!["SERVICE_TOKEN".into()],
+                        executable: "sh".into(),
+                        args: vec!["-c".into(), script.into()],
+                        shell: true,
+                        path: "/usr/bin:/bin".into(),
+                    },
+                    crate::project::random_id().unwrap(),
+                    crate::process::PeerIdentity {
+                        uid: rustix::process::geteuid().as_raw(),
+                        pid: std::process::id(),
+                    },
+                    epoch.clone(),
+                )
+                .unwrap();
+            broker
+                .launch_run(run, vec![], epoch.clone())
+                .unwrap()
+                .job_id
+        };
+        let finished_job = launch_job("exit 0");
+        let finished_by = Instant::now() + Duration::from_secs(2);
+        while !broker
+            .audit_events(None, epoch.clone())
+            .unwrap()
+            .events
+            .iter()
+            .any(|event| event.operation == 19 && event.job_id.as_ref() == Some(&finished_job))
+        {
+            assert!(
+                Instant::now() < finished_by,
+                "short job exit was not audited"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let terminated_job = launch_job("exec sleep 30");
+        let stubborn_job = launch_job("trap '' TERM; while :; do sleep 1; done");
+        std::thread::sleep(Duration::from_millis(200));
+        let stopping = Instant::now();
+        broker.stop_jobs_after(Duration::from_millis(300));
+        assert!(
+            stopping.elapsed() < Duration::from_secs(3),
+            "stopping jobs did not finish promptly"
+        );
+        let history = broker.audit_events(None, epoch.clone()).unwrap();
+        for job in [&terminated_job, &stubborn_job] {
+            assert!(
+                history
+                    .events
+                    .iter()
+                    .any(|event| event.operation == 19 && event.job_id.as_ref() == Some(job)),
+                "stopped job exit was not audited"
+            );
+        }
         let listed = broker
             .secrets(
                 SecretCommand::List {
@@ -3203,6 +3454,22 @@ mod tests {
         broker.lock().expect("lock failed");
         drop(broker);
         let db = Database::open(dir.path()).expect("database reopen failed");
+        let job_signal = |job: &str| -> Option<i64> {
+            db.connection
+                .query_row(
+                    "SELECT signal FROM jobs WHERE id=?1 AND state=4",
+                    [crate::project::parse_id(job).unwrap()],
+                    |row| row.get(0),
+                )
+                .expect("job read failed")
+        };
+        assert_eq!(
+            job_signal(&finished_job),
+            None,
+            "an exited job was signaled"
+        );
+        assert_eq!(job_signal(&terminated_job), Some(15));
+        assert_eq!(job_signal(&stubborn_job), Some(9));
         let wrapped = db
             .wrapped()
             .expect("wrapped key read failed")
